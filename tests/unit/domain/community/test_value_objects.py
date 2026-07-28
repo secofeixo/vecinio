@@ -4,7 +4,6 @@ import pytest
 
 from src.domain.community.value_objects import CIF, ParticipationCoefficient
 
-
 # CIF: format is 1 organization letter + 7 digits + 1 control character.
 # Control character rules:
 #   - digit required for: A, B, E, H

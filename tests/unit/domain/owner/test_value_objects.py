@@ -2,7 +2,6 @@ import pytest
 
 from src.domain.owner.value_objects import NIF, Email, PhoneNumber
 
-
 # NIF: national ID is 8 digits + control letter.
 # NIE (foreign resident) is X/Y/Z + 7 digits + control letter, where X/Y/Z
 # substitute for 0/1/2 respectively before computing the checksum.

@@ -8,7 +8,15 @@ from .unit import Unit
 from .value_objects import CIF, Address, CommunityId, ParticipationCoefficient
 
 
-class ParticipationCoefficientSumError(Exception):
+class CommunityDomainError(Exception):
+    pass
+
+
+class ParticipationCoefficientSumError(CommunityDomainError):
+    pass
+
+
+class DuplicateCifError(CommunityDomainError):
     pass
 
 
@@ -45,5 +53,6 @@ class Community(BaseModel):
         )
         if total != ParticipationCoefficient.FULL:
             raise ParticipationCoefficientSumError(
-                f"Participation coefficients must sum to {ParticipationCoefficient.FULL}, got {total}"
+                f"Participation coefficients must sum to "
+                f"{ParticipationCoefficient.FULL}, got {total}"
             )
