@@ -1,0 +1,95 @@
+default_language_version:
+  python: python3.12
+default_stages:
+  - pre-commit
+repos:
+  # COMMIT MESSAGE CHECKERS
+  - repo: https://github.com/commitizen-tools/commitizen
+    rev: v3.30.1
+    hooks:
+      - id: commitizen # Enforce Conventional Commits standard
+        stages: [commit-msg]
+
+  # DEPENDENCY CHECKERS
+  - repo: https://github.com/astral-sh/uv-pre-commit
+    rev: 0.9.15
+    hooks:
+      - id: uv-lock
+        name: uv lock check
+        args: ["--locked"]
+
+  # CODE CHECKERS
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.1.0
+    hooks:
+      - id: check-docstring-first # Check docstring exists before imports
+      - id: check-merge-conflict # Check for the existence of files with merge conflict strings
+      - id: check-builtin-literals # Check for the use of dict()/list()/set() instead {}/[]
+      - id: check-yaml # Verify yaml syntax
+      - id: check-added-large-files # Check commit does not contain large file size
+        args: ["--maxkb=1024"]
+      - id: check-toml # Verify toml syntax
+
+  - repo: https://github.com/pre-commit/pygrep-hooks
+    rev: v1.10.0
+    hooks:
+      - id: python-use-type-annotations # Enforce type annotation instead of type comment
+      - id: python-no-log-warn # Check for deprecated warn() of loggers
+      - id: python-no-eval # Check for eval() function
+      - id: python-check-blanket-noqa # Enforce that noqa annotations always occur with specific codes
+      - id: python-check-blanket-type-ignore # Enforce that # type: ignore annotations always occur with specific codes
+
+  # FORMATTERS
+  - repo: https://github.com/asottile/pyupgrade
+    rev: v3.19.0
+    hooks:
+      - id: pyupgrade # Upgrade syntax for newer versions of the language
+        args: ["--py312-plus"]
+
+  - repo: https://github.com/pycqa/isort
+    rev: 5.13.2
+    hooks:
+      - id: isort # Sort imports automatically
+        args: ["--profile", "black", "--filter-files"]
+
+  - repo: https://github.com/psf/black
+    rev: 24.10.0
+    hooks:
+      - id: black # Code formatting
+
+  # ANALYZERS
+  - repo: https://github.com/pycqa/pydocstyle
+    rev: 6.3.0
+    hooks:
+      - id: pydocstyle # Enforce the use of a convention in docstrings
+        args: ["--add-ignore=D1", "--convention=google"]
+
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
+    hooks:
+      - id: detect-secrets # Detect secrets placed in code
+        args: ["--baseline", ".secrets.baseline"]
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.13.0
+    hooks:
+      - id: mypy # Check static typing
+        exclude: "^tests/"
+        additional_dependencies:
+          - pydantic>=2.9,<3.0
+
+  - repo: https://github.com/pycqa/flake8
+    rev: 7.3.0
+    hooks:
+      - id: flake8 # Enforce common style guide
+        additional_dependencies:
+          - flake8-bugbear
+
+  - repo: https://github.com/rohaquinlop/complexipy-pre-commit
+    rev: v4.2.0
+    hooks:
+      - id: complexipy
+        exclude: "^tests/"
+        args:
+          - --max-complexity-allowed=12
+          - --output-json
