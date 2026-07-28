@@ -11,7 +11,8 @@
       "Bash(python -)",
       "Bash(python -m py_compile src/infrastructure/persistence/database.py src/infrastructure/persistence/models.py src/infrastructure/persistence/community_repository.py tests/integration/infrastructure/test_community_repository.py)",
       "Bash(docker info *)",
-      "Bash(python -m pytest tests/integration/infrastructure/test_community_repository.py -v)"
+      "Bash(python -m pytest tests/integration/infrastructure/test_community_repository.py -v)",
+      "Bash(xargs -I{} echo {})"
     ]
   }
 }

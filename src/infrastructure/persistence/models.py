@@ -55,3 +55,14 @@ class UnitModel(Base):
     )
 
     community: Mapped[CommunityModel] = relationship(back_populates="units")
+
+
+class OwnerModel(Base):
+    __tablename__ = "owners"
+    __table_args__ = (UniqueConstraint("nif", name="uq_owners_nif"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    nif: Mapped[str] = mapped_column(String, nullable=False)
+    full_name: Mapped[str] = mapped_column(String, nullable=False)
+    email: Mapped[str] = mapped_column(String, nullable=False)
+    phone: Mapped[str | None] = mapped_column(String, nullable=True)
