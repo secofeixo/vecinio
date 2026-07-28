@@ -1,0 +1,41 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Test: Unit",
+      "type": "shell",
+      "command": "uv",
+      "args": ["run", "pytest", "tests/unit", "-v"],
+      "group": "test",
+      "presentation": { "reveal": "always", "panel": "dedicated" },
+      "problemMatcher": []
+    },
+    {
+      "label": "Test: Integration",
+      "type": "shell",
+      "command": "uv",
+      "args": ["run", "pytest", "tests/integration", "-v"],
+      "group": "test",
+      "presentation": { "reveal": "always", "panel": "dedicated" },
+      "problemMatcher": []
+    },
+    {
+      "label": "Test: E2E",
+      "type": "shell",
+      "command": "uv",
+      "args": ["run", "pytest", "tests/e2e", "-v"],
+      "group": "test",
+      "presentation": { "reveal": "always", "panel": "dedicated" },
+      "problemMatcher": []
+    },
+    {
+      "label": "Test: All",
+      "type": "shell",
+      "command": "uv",
+      "args": ["run", "pytest", "tests", "-v"],
+      "group": "test",
+      "presentation": { "reveal": "always", "panel": "dedicated" },
+      "problemMatcher": []
+    }
+  ]
+}

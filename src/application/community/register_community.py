@@ -75,5 +75,5 @@ class RegisterCommunity:
             participation_coefficient=ParticipationCoefficient(
                 value=unit.participation_coefficient
             ),
-            owner_ids=[OwnerId(value=owner_id) for owner_id in unit.owner_ids],
+            owner_ids=tuple(OwnerId(value=owner_id) for owner_id in unit.owner_ids),
         )
