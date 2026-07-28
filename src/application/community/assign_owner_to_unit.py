@@ -25,16 +25,18 @@ class AssignOwnerToUnit:
         self._community_repository = community_repository
         self._owner_repository = owner_repository
 
-    def execute(self, *, community_id: UUID, unit_id: UUID, owner_id: UUID) -> None:
+    async def execute(
+        self, *, community_id: UUID, unit_id: UUID, owner_id: UUID
+    ) -> None:
         community_id_vo = CommunityId(value=community_id)
-        community = self._community_repository.get_by_id(community_id_vo)
+        community = await self._community_repository.get_by_id(community_id_vo)
         if community is None:
             raise CommunityNotFoundError(f"No community found with id {community_id}")
 
         owner_id_vo = OwnerId(value=owner_id)
-        if self._owner_repository.get_by_id(owner_id_vo) is None:
+        if await self._owner_repository.get_by_id(owner_id_vo) is None:
             raise OwnerNotFoundError(f"No owner found with id {owner_id}")
 
         community.assign_owner_to_unit(UnitId(value=unit_id), owner_id_vo)
 
-        self._community_repository.save(community)
+        await self._community_repository.save(community)

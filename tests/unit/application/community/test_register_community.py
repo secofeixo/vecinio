@@ -21,7 +21,8 @@ def address_kwargs() -> dict:
     )
 
 
-def test_registers_community_with_valid_units_and_persists_it() -> None:
+@pytest.mark.asyncio
+async def test_registers_community_with_valid_units_and_persists_it() -> None:
     repository = InMemoryCommunityRepository()
     use_case = RegisterCommunity(repository)
     owner_id = uuid4()
@@ -30,14 +31,14 @@ def test_registers_community_with_valid_units_and_persists_it() -> None:
         UnitInput(participation_coefficient=Decimal("0.4")),
     ]
 
-    community_id = use_case.execute(
+    community_id = await use_case.execute(
         name="Edificio Sol",
         cif="H12345674",
         units=units,
         **address_kwargs(),
     )
 
-    persisted = repository.get_by_id(community_id)
+    persisted = await repository.get_by_id(community_id)
     assert persisted is not None
     assert persisted.name == "Edificio Sol"
     assert persisted.cif.value == "H12345674"
@@ -49,23 +50,25 @@ def test_registers_community_with_valid_units_and_persists_it() -> None:
     assert unit_with_owner.owner_ids[0].value == owner_id
 
 
-def test_registers_community_with_zero_units() -> None:
+@pytest.mark.asyncio
+async def test_registers_community_with_zero_units() -> None:
     repository = InMemoryCommunityRepository()
     use_case = RegisterCommunity(repository)
 
-    community_id = use_case.execute(
+    community_id = await use_case.execute(
         name="Edificio Luna",
         cif="H12345674",
         units=[],
         **address_kwargs(),
     )
 
-    persisted = repository.get_by_id(community_id)
+    persisted = await repository.get_by_id(community_id)
     assert persisted is not None
     assert persisted.units == ()
 
 
-def test_execute_propagates_participation_coefficient_sum_error_and_persists_nothing() -> (
+@pytest.mark.asyncio
+async def test_propagates_participation_coefficient_sum_error_and_persists_nothing() -> (
     None
 ):
     repository = InMemoryCommunityRepository()
@@ -76,7 +79,7 @@ def test_execute_propagates_participation_coefficient_sum_error_and_persists_not
     ]
 
     with pytest.raises(ParticipationCoefficientSumError):
-        use_case.execute(
+        await use_case.execute(
             name="Edificio Fallido",
             cif="H12345674",
             units=units,
@@ -86,12 +89,15 @@ def test_execute_propagates_participation_coefficient_sum_error_and_persists_not
     assert repository.all() == ()
 
 
-def test_execute_propagates_value_error_for_invalid_cif_and_persists_nothing() -> None:
+@pytest.mark.asyncio
+async def test_execute_propagates_value_error_for_invalid_cif_and_persists_nothing() -> (
+    None
+):
     repository = InMemoryCommunityRepository()
     use_case = RegisterCommunity(repository)
 
     with pytest.raises(ValueError):
-        use_case.execute(
+        await use_case.execute(
             name="Edificio Fallido",
             cif="INVALID",
             units=[],
@@ -101,7 +107,8 @@ def test_execute_propagates_value_error_for_invalid_cif_and_persists_nothing() -
     assert repository.all() == ()
 
 
-def test_execute_propagates_value_error_for_duplicate_unit_ids_and_persists_nothing() -> (
+@pytest.mark.asyncio
+async def test_execute_propagates_value_error_for_duplicate_unit_ids_and_persists_nothing() -> (
     None
 ):
     repository = InMemoryCommunityRepository()
@@ -113,7 +120,7 @@ def test_execute_propagates_value_error_for_duplicate_unit_ids_and_persists_noth
     ]
 
     with pytest.raises(ValueError):
-        use_case.execute(
+        await use_case.execute(
             name="Edificio Fallido",
             cif="H12345674",
             units=units,
@@ -123,10 +130,11 @@ def test_execute_propagates_value_error_for_duplicate_unit_ids_and_persists_noth
     assert repository.all() == ()
 
 
-def test_execute_propagates_duplicate_cif_error_and_persists_nothing() -> None:
+@pytest.mark.asyncio
+async def test_execute_propagates_duplicate_cif_error_and_persists_nothing() -> None:
     repository = InMemoryCommunityRepository()
     use_case = RegisterCommunity(repository)
-    use_case.execute(
+    await use_case.execute(
         name="Edificio Sol",
         cif="H12345674",
         units=[],
@@ -134,7 +142,7 @@ def test_execute_propagates_duplicate_cif_error_and_persists_nothing() -> None:
     )
 
     with pytest.raises(DuplicateCifError):
-        use_case.execute(
+        await use_case.execute(
             name="Edificio Luna",
             cif="H12345674",
             units=[],

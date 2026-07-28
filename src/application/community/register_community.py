@@ -29,7 +29,7 @@ class RegisterCommunity:
     def __init__(self, repository: CommunityRepository) -> None:
         self._repository = repository
 
-    def execute(
+    async def execute(
         self,
         *,
         name: str,
@@ -42,7 +42,7 @@ class RegisterCommunity:
         units: Iterable[UnitInput] = (),
     ) -> CommunityId:
         cif_vo = CIF(value=cif)
-        if self._repository.exists_by_cif(cif_vo):
+        if await self._repository.exists_by_cif(cif_vo):
             raise DuplicateCifError(
                 f"A community with CIF {cif_vo.value} already exists"
             )
@@ -61,7 +61,7 @@ class RegisterCommunity:
             units=tuple(self._to_unit(unit) for unit in units),
         )
 
-        self._repository.save(community)
+        await self._repository.save(community)
         return community.id
 
     @staticmethod

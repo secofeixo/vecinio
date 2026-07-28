@@ -9,7 +9,7 @@ class RegisterOwner:
     def __init__(self, repository: OwnerRepository) -> None:
         self._repository = repository
 
-    def execute(
+    async def execute(
         self,
         *,
         nif: str,
@@ -18,7 +18,7 @@ class RegisterOwner:
         phone: str | None,
     ) -> OwnerId:
         nif_vo = NIF(value=nif)
-        if self._repository.exists_by_nif(nif_vo):
+        if await self._repository.exists_by_nif(nif_vo):
             raise DuplicateNifError(f"An owner with NIF {nif_vo.value} already exists")
 
         owner = Owner(
@@ -29,5 +29,5 @@ class RegisterOwner:
             phone=PhoneNumber(value=phone) if phone is not None else None,
         )
 
-        self._repository.save(owner)
+        await self._repository.save(owner)
         return owner.id

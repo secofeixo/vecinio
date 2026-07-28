@@ -9,13 +9,13 @@ class InMemoryCommunityRepository(CommunityRepository):
     def __init__(self) -> None:
         self._communities: dict[CommunityId, Community] = {}
 
-    def save(self, community: Community) -> None:
+    async def save(self, community: Community) -> None:
         self._communities[community.id] = community
 
-    def get_by_id(self, community_id: CommunityId) -> Community | None:
+    async def get_by_id(self, community_id: CommunityId) -> Community | None:
         return self._communities.get(community_id)
 
-    def exists_by_cif(self, cif: CIF) -> bool:
+    async def exists_by_cif(self, cif: CIF) -> bool:
         return any(community.cif == cif for community in self._communities.values())
 
     def all(self) -> tuple[Community, ...]:
