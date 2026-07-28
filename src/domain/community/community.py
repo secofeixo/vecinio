@@ -4,8 +4,10 @@ from collections.abc import Iterable
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
+from src.domain.owner.value_objects import OwnerId
+
 from .unit import Unit
-from .value_objects import CIF, Address, CommunityId, ParticipationCoefficient
+from .value_objects import CIF, Address, CommunityId, ParticipationCoefficient, UnitId
 
 
 class CommunityDomainError(Exception):
@@ -17,6 +19,14 @@ class ParticipationCoefficientSumError(CommunityDomainError):
 
 
 class DuplicateCifError(CommunityDomainError):
+    pass
+
+
+class UnitNotFoundError(CommunityDomainError):
+    pass
+
+
+class OwnerAlreadyAssignedError(CommunityDomainError):
     pass
 
 
@@ -38,6 +48,25 @@ class Community(BaseModel):
         new_units = tuple(units)
         self._check_units_are_valid(new_units)
         self.units = new_units
+
+    def assign_owner_to_unit(self, unit_id: UnitId, owner_id: OwnerId) -> None:
+        target = next((unit for unit in self.units if unit.id == unit_id), None)
+        if target is None:
+            raise UnitNotFoundError(f"No unit found with id {unit_id}")
+
+        if owner_id in target.owner_ids:
+            raise OwnerAlreadyAssignedError(
+                f"Owner {owner_id} is already assigned to unit {unit_id}"
+            )
+
+        updated_unit = Unit(
+            id=target.id,
+            participation_coefficient=target.participation_coefficient,
+            owner_ids=target.owner_ids + (owner_id,),
+        )
+        self.redefine_units(
+            updated_unit if unit.id == unit_id else unit for unit in self.units
+        )
 
     @staticmethod
     def _check_units_are_valid(units: tuple[Unit, ...]) -> None:

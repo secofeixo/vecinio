@@ -2,7 +2,12 @@ from decimal import Decimal
 
 import pytest
 
-from src.domain.community.community import Community, ParticipationCoefficientSumError
+from src.domain.community.community import (
+    Community,
+    OwnerAlreadyAssignedError,
+    ParticipationCoefficientSumError,
+    UnitNotFoundError,
+)
 from src.domain.community.unit import Unit
 from src.domain.community.value_objects import (
     CIF,
@@ -11,6 +16,7 @@ from src.domain.community.value_objects import (
     ParticipationCoefficient,
     UnitId,
 )
+from src.domain.owner.value_objects import OwnerId
 
 
 def make_address() -> Address:
@@ -116,3 +122,63 @@ def test_community_preserves_previous_valid_state_after_failed_redefine() -> Non
         community.redefine_units([make_unit("0.5")])
 
     assert community.units == tuple(units)
+
+
+def test_assign_owner_to_unit_succeeds_for_existing_unit() -> None:
+    unit = make_unit("1")
+    community = make_community([unit])
+    owner_id = OwnerId.generate()
+
+    community.assign_owner_to_unit(unit.id, owner_id)
+
+    updated_unit = community.units[0]
+    assert updated_unit.owner_ids == (owner_id,)
+    assert updated_unit.id == unit.id
+    assert updated_unit.participation_coefficient == unit.participation_coefficient
+
+
+def test_assign_owner_to_unit_raises_when_unit_not_found() -> None:
+    community = make_community([make_unit("1")])
+
+    with pytest.raises(UnitNotFoundError):
+        community.assign_owner_to_unit(UnitId.generate(), OwnerId.generate())
+
+
+def test_assign_owner_to_unit_raises_when_owner_already_assigned() -> None:
+    owner_id = OwnerId.generate()
+    unit = Unit(
+        id=UnitId.generate(),
+        participation_coefficient=ParticipationCoefficient(value=Decimal("1")),
+        owner_ids=(owner_id,),
+    )
+    community = make_community([unit])
+
+    with pytest.raises(OwnerAlreadyAssignedError):
+        community.assign_owner_to_unit(unit.id, owner_id)
+
+
+def test_assign_owner_to_unit_allows_second_different_owner_co_ownership() -> None:
+    owner_a = OwnerId.generate()
+    owner_b = OwnerId.generate()
+    unit = Unit(
+        id=UnitId.generate(),
+        participation_coefficient=ParticipationCoefficient(value=Decimal("1")),
+        owner_ids=(owner_a,),
+    )
+    community = make_community([unit])
+
+    community.assign_owner_to_unit(unit.id, owner_b)
+
+    assert community.units[0].owner_ids == (owner_a, owner_b)
+
+
+def test_assign_owner_to_unit_leaves_other_units_untouched() -> None:
+    unit_a = make_unit("0.5")
+    unit_b = make_unit("0.5")
+    community = make_community([unit_a, unit_b])
+
+    community.assign_owner_to_unit(unit_a.id, OwnerId.generate())
+
+    untouched = next(unit for unit in community.units if unit.id == unit_b.id)
+    assert untouched.owner_ids == ()
+    assert untouched.participation_coefficient == unit_b.participation_coefficient
