@@ -13,6 +13,10 @@ class DuplicateNifError(OwnerDomainError):
     pass
 
 
+class ConcurrentModificationError(OwnerDomainError):
+    pass
+
+
 class Owner(BaseModel):
     model_config = ConfigDict(validate_assignment=True)
 
@@ -21,3 +25,4 @@ class Owner(BaseModel):
     full_name: str
     email: Email
     phone: PhoneNumber | None = None
+    version: int = 0

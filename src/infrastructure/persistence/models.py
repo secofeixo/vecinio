@@ -23,6 +23,7 @@ class CommunityModel(Base):
     postal_code: Mapped[str] = mapped_column(String, nullable=False)
     province: Mapped[str] = mapped_column(String, nullable=False)
     cif: Mapped[str] = mapped_column(String, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
 
     units: Mapped[list[UnitModel]] = relationship(
         back_populates="community", cascade="all, delete-orphan"
@@ -66,3 +67,4 @@ class OwnerModel(Base):
     full_name: Mapped[str] = mapped_column(String, nullable=False)
     email: Mapped[str] = mapped_column(String, nullable=False)
     phone: Mapped[str | None] = mapped_column(String, nullable=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")

@@ -12,7 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from testcontainers.community.postgres import PostgresContainer
 
-from src.domain.owner.owner import DuplicateNifError, Owner
+from src.domain.owner.owner import ConcurrentModificationError, DuplicateNifError, Owner
 from src.domain.owner.value_objects import NIF, Email, OwnerId, PhoneNumber
 from src.infrastructure.persistence.models import OwnerModel
 from src.infrastructure.persistence.owner_repository import PostgresOwnerRepository
@@ -209,3 +209,48 @@ async def test_session_usable_immediately_after_duplicate_nif_error(
 
     result = await session.execute(text("SELECT 1"))
     assert result.scalar_one() == 1
+
+
+@pytest.mark.asyncio
+async def test_concurrent_save_raises_concurrent_modification_error(
+    postgres_container: PostgresContainer, session: AsyncSession
+) -> None:
+    # Simulates two processes racing to modify the same owner: both read it at
+    # the same version, each independently changes a different field, and both
+    # try to save. The second save must not silently clobber the first change —
+    # it must detect the stale version and fail. There's no domain method that
+    # mutates Owner yet, so the fields are set directly here for this test only.
+    owner = make_owner()
+    setup_repository = PostgresOwnerRepository(session)
+    await setup_repository.save(owner)
+    await session.commit()
+
+    url = postgres_container.get_connection_url()
+    engine_two = create_async_engine(url)
+    session_factory_two = async_sessionmaker(engine_two, expire_on_commit=False)
+
+    try:
+        async with session_factory_two() as session_two:
+            repository_one = PostgresOwnerRepository(session)
+            repository_two = PostgresOwnerRepository(session_two)
+
+            owner_one = await repository_one.get_by_id(owner.id)
+            owner_two = await repository_two.get_by_id(owner.id)
+            assert owner_one is not None
+            assert owner_two is not None
+
+            owner_one.full_name = "Juan Garcia Primero"
+            owner_two.full_name = "Juan Garcia Segundo"
+
+            await repository_one.save(owner_one)
+            await session.commit()
+
+            with pytest.raises(ConcurrentModificationError):
+                await repository_two.save(owner_two)
+            await session_two.rollback()
+    finally:
+        await engine_two.dispose()
+
+    fetched = await setup_repository.get_by_id(owner.id)
+    assert fetched is not None
+    assert fetched.full_name == "Juan Garcia Primero"

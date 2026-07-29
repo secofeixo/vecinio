@@ -13,7 +13,11 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from testcontainers.community.postgres import PostgresContainer
 
-from src.domain.community.community import Community, DuplicateCifError
+from src.domain.community.community import (
+    Community,
+    ConcurrentModificationError,
+    DuplicateCifError,
+)
 from src.domain.community.unit import Unit
 from src.domain.community.value_objects import (
     CIF,
@@ -256,3 +260,49 @@ async def test_round_trips_coefficients_requiring_more_than_six_decimals(
         (unit.participation_coefficient.value for unit in fetched.units), Decimal("0")
     )
     assert total == Decimal("1")
+
+
+@pytest.mark.asyncio
+async def test_concurrent_save_raises_concurrent_modification_error(
+    postgres_container: PostgresContainer, session: AsyncSession
+) -> None:
+    # Simulates two processes racing to modify the same community: both read
+    # it at the same version, each independently assigns a different owner to
+    # the unit, and both try to save. The second save must not silently clobber
+    # the first owner's assignment — it must detect the stale version and fail.
+    owner_a, owner_b = OwnerId.generate(), OwnerId.generate()
+    unit = make_unit("1")
+    community = make_community(units=(unit,))
+    setup_repository = PostgresCommunityRepository(session)
+    await setup_repository.save(community)
+    await session.commit()
+
+    url = postgres_container.get_connection_url()
+    engine_two = create_async_engine(url)
+    session_factory_two = async_sessionmaker(engine_two, expire_on_commit=False)
+
+    try:
+        async with session_factory_two() as session_two:
+            repository_one = PostgresCommunityRepository(session)
+            repository_two = PostgresCommunityRepository(session_two)
+
+            community_one = await repository_one.get_by_id(community.id)
+            community_two = await repository_two.get_by_id(community.id)
+            assert community_one is not None
+            assert community_two is not None
+
+            community_one.assign_owner_to_unit(unit.id, owner_a)
+            community_two.assign_owner_to_unit(unit.id, owner_b)
+
+            await repository_one.save(community_one)
+            await session.commit()
+
+            with pytest.raises(ConcurrentModificationError):
+                await repository_two.save(community_two)
+            await session_two.rollback()
+    finally:
+        await engine_two.dispose()
+
+    fetched = await setup_repository.get_by_id(community.id)
+    assert fetched is not None
+    assert fetched.units[0].owner_ids == (owner_a,)

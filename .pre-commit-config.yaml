@@ -2,6 +2,7 @@ default_language_version:
   python: python3.12
 default_stages:
   - pre-commit
+exclude: ^migrations/
 repos:
   # COMMIT MESSAGE CHECKERS
   - repo: https://github.com/commitizen-tools/commitizen

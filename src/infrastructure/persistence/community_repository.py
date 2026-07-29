@@ -6,7 +6,11 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from src.domain.community.community import Community, DuplicateCifError
+from src.domain.community.community import (
+    Community,
+    ConcurrentModificationError,
+    DuplicateCifError,
+)
 from src.domain.community.repository import CommunityRepository
 from src.domain.community.unit import Unit
 from src.domain.community.value_objects import (
@@ -49,6 +53,8 @@ class PostgresCommunityRepository(CommunityRepository):
         return bool(result.scalar())
 
     async def _upsert_community(self, community: Community) -> None:
+        expected_version = community.version
+        new_version = expected_version + 1
         stmt = pg_insert(CommunityModel).values(
             id=community.id.value,
             name=community.name,
@@ -58,6 +64,7 @@ class PostgresCommunityRepository(CommunityRepository):
             postal_code=community.address.postal_code,
             province=community.address.province,
             cif=community.cif.value,
+            version=new_version,
         )
         stmt = stmt.on_conflict_do_update(
             index_elements=[CommunityModel.id],
@@ -69,10 +76,21 @@ class PostgresCommunityRepository(CommunityRepository):
                 "postal_code": stmt.excluded.postal_code,
                 "province": stmt.excluded.province,
                 "cif": stmt.excluded.cif,
+                "version": stmt.excluded.version,
             },
+            # Only takes effect on the update path (a brand-new row always
+            # inserts regardless of expected_version): if another transaction
+            # already advanced the version past what this aggregate was read
+            # at, the WHERE fails, the update is skipped, and the statement
+            # affects zero rows instead of silently overwriting the newer data.
+            where=(CommunityModel.version == expected_version),
         )
+        # rowcount is unreliable for INSERT ... ON CONFLICT DO UPDATE ... WHERE
+        # with the async psycopg driver (reports -1), so RETURNING is used to
+        # detect a skipped update instead: a row comes back on insert or a
+        # matched update, nothing comes back when the WHERE excludes the row.
         try:
-            await self._session.execute(stmt)
+            result = await self._session.execute(stmt.returning(CommunityModel.id))
         except IntegrityError as error:
             # Any IntegrityError leaves the underlying connection in an aborted
             # transaction, unusable until rolled back. Roll back here rather
@@ -85,6 +103,13 @@ class PostgresCommunityRepository(CommunityRepository):
                     f"A community with CIF {community.cif.value} already exists"
                 ) from error
             raise
+
+        if result.first() is None:
+            raise ConcurrentModificationError(
+                f"Community {community.id.value} was modified concurrently; "
+                f"expected version {expected_version}"
+            )
+        community.version = new_version
 
     @staticmethod
     def _violates_cif_uniqueness(error: IntegrityError) -> bool:
@@ -126,6 +151,7 @@ class PostgresCommunityRepository(CommunityRepository):
                 province=model.province,
             ),
             cif=CIF(value=model.cif),
+            version=model.version,
             units=tuple(
                 Unit(
                     id=UnitId(value=unit.id),

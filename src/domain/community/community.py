@@ -30,6 +30,10 @@ class OwnerAlreadyAssignedError(CommunityDomainError):
     pass
 
 
+class ConcurrentModificationError(CommunityDomainError):
+    pass
+
+
 class Community(BaseModel):
     model_config = ConfigDict(validate_assignment=True)
 
@@ -38,6 +42,7 @@ class Community(BaseModel):
     address: Address
     cif: CIF
     units: tuple[Unit, ...] = ()
+    version: int = 0
 
     @model_validator(mode="after")
     def _check_invariants(self) -> Community:
