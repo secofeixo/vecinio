@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import os
+import subprocess
 from collections.abc import AsyncIterator
+from pathlib import Path
 
 import pytest
 import pytest_asyncio
@@ -11,12 +14,24 @@ from testcontainers.community.postgres import PostgresContainer
 
 from src.domain.owner.owner import DuplicateNifError, Owner
 from src.domain.owner.value_objects import NIF, Email, OwnerId, PhoneNumber
-from src.infrastructure.persistence.models import Base, OwnerModel
+from src.infrastructure.persistence.models import OwnerModel
 from src.infrastructure.persistence.owner_repository import PostgresOwnerRepository
 
-# Integration test: no Alembic migrations exist yet in this repo, so tables are
-# created directly from the ORM metadata against a real, containerized Postgres.
-# Once migrations are introduced, this should run them instead.
+REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+def _run_alembic(command: str, target: str, url: str) -> None:
+    env = os.environ.copy()
+    env["DATABASE_URL"] = url
+    result = subprocess.run(
+        ["uv", "run", "alembic", command, target],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(result.stdout + result.stderr)
 
 
 @pytest.fixture(scope="module")
@@ -27,17 +42,16 @@ def postgres_container() -> AsyncIterator[PostgresContainer]:
 
 @pytest_asyncio.fixture
 async def session(postgres_container: PostgresContainer) -> AsyncIterator[AsyncSession]:
-    engine = create_async_engine(postgres_container.get_connection_url())
-    async with engine.begin() as connection:
-        await connection.run_sync(Base.metadata.create_all)
+    url = postgres_container.get_connection_url()
+    _run_alembic("upgrade", "head", url)
+    engine = create_async_engine(url)
 
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
         yield session
 
-    async with engine.begin() as connection:
-        await connection.run_sync(Base.metadata.drop_all)
     await engine.dispose()
+    _run_alembic("downgrade", "base", url)
 
 
 def make_owner(nif: str = "12345678Z", has_phone: bool = True) -> Owner:
