@@ -4,6 +4,7 @@ import os
 import subprocess
 from collections.abc import AsyncIterator
 from decimal import Decimal
+from itertools import count
 from pathlib import Path
 
 import pytest
@@ -79,9 +80,13 @@ def make_address() -> Address:
     )
 
 
+_identifier_sequence = count(1)
+
+
 def make_unit(coefficient: str, owner_ids: tuple[OwnerId, ...] = ()) -> Unit:
     return Unit(
         id=UnitId.generate(),
+        identifier=f"unit-{next(_identifier_sequence)}",
         participation_coefficient=ParticipationCoefficient(value=Decimal(coefficient)),
         owner_ids=owner_ids,
     )
@@ -121,6 +126,35 @@ async def test_save_and_get_by_id_round_trips_all_fields(session: AsyncSession) 
 
 
 @pytest.mark.asyncio
+async def test_save_and_get_by_id_round_trips_unit_identifier(
+    session: AsyncSession,
+) -> None:
+    units = (
+        Unit(
+            id=UnitId.generate(),
+            identifier="4º-2ª",
+            participation_coefficient=ParticipationCoefficient(value=Decimal("0.6")),
+        ),
+        Unit(
+            id=UnitId.generate(),
+            identifier="Bajo A",
+            participation_coefficient=ParticipationCoefficient(value=Decimal("0.4")),
+        ),
+    )
+    community = make_community(units=units)
+    repository = PostgresCommunityRepository(session)
+
+    await repository.save(community)
+    await session.commit()
+
+    fetched = await repository.get_by_id(community.id)
+
+    assert fetched is not None
+    identifiers = {unit.identifier for unit in fetched.units}
+    assert identifiers == {"4º-2ª", "Bajo A"}
+
+
+@pytest.mark.asyncio
 async def test_get_by_id_returns_none_when_not_found(session: AsyncSession) -> None:
     repository = PostgresCommunityRepository(session)
 
@@ -143,6 +177,7 @@ async def test_save_called_twice_updates_instead_of_duplicating(
     community.name = "Edificio Sol Renovado"
     rebalanced_unit = Unit(
         id=unit.id,
+        identifier=unit.identifier,
         participation_coefficient=ParticipationCoefficient(value=Decimal("1")),
         owner_ids=(OwnerId.generate(),),
     )

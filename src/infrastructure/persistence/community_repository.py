@@ -130,6 +130,7 @@ class PostgresCommunityRepository(CommunityRepository):
                     "id": unit.id.value,
                     "community_id": community.id.value,
                     "position": position,
+                    "identifier": unit.identifier,
                     "participation_coefficient": unit.participation_coefficient.value,
                     "owner_ids": [owner_id.value for owner_id in unit.owner_ids],
                 }
@@ -155,6 +156,7 @@ class PostgresCommunityRepository(CommunityRepository):
             units=tuple(
                 Unit(
                     id=UnitId(value=unit.id),
+                    identifier=unit.identifier,
                     participation_coefficient=ParticipationCoefficient(
                         value=unit.participation_coefficient
                     ),

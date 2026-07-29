@@ -22,6 +22,10 @@ class DuplicateCifError(CommunityDomainError):
     pass
 
 
+class DuplicateUnitIdentifierError(CommunityDomainError):
+    pass
+
+
 class UnitNotFoundError(CommunityDomainError):
     pass
 
@@ -66,6 +70,7 @@ class Community(BaseModel):
 
         updated_unit = Unit(
             id=target.id,
+            identifier=target.identifier,
             participation_coefficient=target.participation_coefficient,
             owner_ids=target.owner_ids + (owner_id,),
         )
@@ -78,6 +83,12 @@ class Community(BaseModel):
         ids = [unit.id for unit in units]
         if len(ids) != len(set(ids)):
             raise ValueError("Unit ids must be unique within a community")
+
+        identifiers = [unit.identifier for unit in units]
+        if len(identifiers) != len(set(identifiers)):
+            raise DuplicateUnitIdentifierError(
+                "Unit identifiers must be unique within a community"
+            )
 
         if not units:
             return

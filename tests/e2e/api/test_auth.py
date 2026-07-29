@@ -175,7 +175,7 @@ async def test_full_auth_flow_register_login_access_refresh_logout(
             "postal_code": "28001",
             "province": "Madrid",
             "cif": "H12345674",
-            "units": [{"participation_coefficient": "1"}],
+            "units": [{"identifier": "4º-2ª", "participation_coefficient": "1"}],
         },
         headers={"Authorization": f"Bearer {access_token}"},
     )

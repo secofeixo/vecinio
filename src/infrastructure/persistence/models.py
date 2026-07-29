@@ -59,6 +59,7 @@ class UnitModel(Base):
     # repository replaces all units on every save, so row insertion order alone
     # can't be relied on to survive a read-back.
     position: Mapped[int] = mapped_column(Integer, nullable=False)
+    identifier: Mapped[str] = mapped_column(String, nullable=False)
     participation_coefficient: Mapped[str] = mapped_column(Numeric, nullable=False)
     owner_ids: Mapped[list[uuid.UUID]] = mapped_column(
         ARRAY(UUID(as_uuid=True)), nullable=False, default=list

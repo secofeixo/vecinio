@@ -103,7 +103,7 @@ def _community_payload(name: str = "Edificio Sol", cif: str = "H12345674") -> di
         "postal_code": "28001",
         "province": "Madrid",
         "cif": cif,
-        "units": [{"participation_coefficient": "1"}],
+        "units": [{"identifier": "4º-2ª", "participation_coefficient": "1"}],
     }
 
 

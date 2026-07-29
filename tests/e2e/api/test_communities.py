@@ -89,7 +89,7 @@ def _community_payload(name: str = "Edificio Sol", cif: str = "H12345674") -> di
         "postal_code": "28001",
         "province": "Madrid",
         "cif": cif,
-        "units": [{"participation_coefficient": "1"}],
+        "units": [{"identifier": "4º-2ª", "participation_coefficient": "1"}],
     }
 
 
@@ -131,6 +131,7 @@ async def test_create_community_returns_201_with_expected_body(
         "province": "Madrid",
     }
     assert len(body["units"]) == 1
+    assert body["units"][0]["identifier"] == "4º-2ª"
     assert body["units"][0]["participation_coefficient"] == "1"
     assert body["units"][0]["owner_ids"] == []
 
@@ -150,6 +151,22 @@ async def test_duplicate_cif_returns_409_with_json_body(
     )
 
     assert response.status_code == 409
+    assert "detail" in response.json()
+
+
+@pytest.mark.asyncio
+async def test_duplicate_unit_identifier_in_same_request_returns_400(
+    client: httpx.AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    payload = _community_payload(cif="H12345674")
+    payload["units"] = [
+        {"identifier": "4º-2ª", "participation_coefficient": "0.5"},
+        {"identifier": "4º-2ª", "participation_coefficient": "0.5"},
+    ]
+
+    response = await client.post("/communities", json=payload, headers=auth_headers)
+
+    assert response.status_code == 400
     assert "detail" in response.json()
 
 

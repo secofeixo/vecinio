@@ -41,6 +41,7 @@ def make_address() -> Address:
 def make_unit(coefficient: str = "1", owner_ids: tuple[OwnerId, ...] = ()) -> Unit:
     return Unit(
         id=UnitId.generate(),
+        identifier="4º-2ª",
         participation_coefficient=ParticipationCoefficient(value=Decimal(coefficient)),
         owner_ids=owner_ids,
     )

@@ -21,6 +21,7 @@ from src.domain.owner.value_objects import OwnerId
 @dataclass(frozen=True)
 class UnitInput:
     participation_coefficient: Decimal
+    identifier: str
     unit_id: UUID | None = None
     owner_ids: tuple[UUID, ...] = field(default_factory=tuple)
 
@@ -72,6 +73,7 @@ class RegisterCommunity:
                 if unit.unit_id is not None
                 else UnitId.generate()
             ),
+            identifier=unit.identifier,
             participation_coefficient=ParticipationCoefficient(
                 value=unit.participation_coefficient
             ),

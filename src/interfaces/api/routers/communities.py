@@ -44,6 +44,7 @@ def _to_response(community: Community) -> CommunityResponse:
         units=[
             UnitResponse(
                 id=unit.id.value,
+                identifier=unit.identifier,
                 participation_coefficient=unit.participation_coefficient.value,
                 owner_ids=[owner_id.value for owner_id in unit.owner_ids],
             )
@@ -72,6 +73,7 @@ async def create_community(
         units=[
             UnitInput(
                 participation_coefficient=unit.participation_coefficient,
+                identifier=unit.identifier,
                 unit_id=unit.unit_id,
                 owner_ids=tuple(unit.owner_ids),
             )

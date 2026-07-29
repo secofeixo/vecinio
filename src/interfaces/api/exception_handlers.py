@@ -17,6 +17,7 @@ from src.domain.community.community import (
 )
 from src.domain.community.community import (
     DuplicateCifError,
+    DuplicateUnitIdentifierError,
     OwnerAlreadyAssignedError,
     UnitNotFoundError,
 )
@@ -80,4 +81,5 @@ def register_exception_handlers(app: FastAPI) -> None:
     app.add_exception_handler(InvalidCredentialsError, _handle_unauthorized)
     app.add_exception_handler(InvalidRefreshTokenError, _handle_unauthorized)
 
+    app.add_exception_handler(DuplicateUnitIdentifierError, _handle_value_error)
     app.add_exception_handler(ValueError, _handle_value_error)

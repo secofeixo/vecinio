@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 
 class UnitRequest(BaseModel):
+    identifier: str
     participation_coefficient: Decimal
     unit_id: UUID | None = None
     owner_ids: list[UUID] = []
@@ -37,6 +38,7 @@ class AddressResponse(BaseModel):
 
 class UnitResponse(BaseModel):
     id: UUID
+    identifier: str
     participation_coefficient: Decimal
     owner_ids: list[UUID]
 

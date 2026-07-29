@@ -1,9 +1,11 @@
 from decimal import Decimal
+from itertools import count
 
 import pytest
 
 from src.domain.community.community import (
     Community,
+    DuplicateUnitIdentifierError,
     OwnerAlreadyAssignedError,
     ParticipationCoefficientSumError,
     UnitNotFoundError,
@@ -29,9 +31,15 @@ def make_address() -> Address:
     )
 
 
-def make_unit(coefficient: str, unit_id: UnitId | None = None) -> Unit:
+_identifier_sequence = count(1)
+
+
+def make_unit(
+    coefficient: str, unit_id: UnitId | None = None, identifier: str | None = None
+) -> Unit:
     return Unit(
         id=unit_id or UnitId.generate(),
+        identifier=identifier or f"unit-{next(_identifier_sequence)}",
         participation_coefficient=ParticipationCoefficient(value=Decimal(coefficient)),
     )
 
@@ -73,6 +81,27 @@ def test_registration_rejects_duplicate_unit_ids() -> None:
 
     with pytest.raises(ValueError):
         make_community(units)
+
+
+def test_registration_rejects_duplicate_unit_identifiers() -> None:
+    units = [
+        make_unit("0.5", identifier="4º-2ª"),
+        make_unit("0.5", identifier="4º-2ª"),
+    ]
+
+    with pytest.raises(DuplicateUnitIdentifierError):
+        make_community(units)
+
+
+def test_registration_accepts_units_with_distinct_identifiers() -> None:
+    units = [
+        make_unit("0.5", identifier="4º-2ª"),
+        make_unit("0.5", identifier="Bajo A"),
+    ]
+
+    community = make_community(units)
+
+    assert community.units == tuple(units)
 
 
 def test_redefine_units_from_empty_to_single_full_unit_succeeds() -> None:
@@ -148,6 +177,7 @@ def test_assign_owner_to_unit_raises_when_owner_already_assigned() -> None:
     owner_id = OwnerId.generate()
     unit = Unit(
         id=UnitId.generate(),
+        identifier="4º-2ª",
         participation_coefficient=ParticipationCoefficient(value=Decimal("1")),
         owner_ids=(owner_id,),
     )
@@ -162,6 +192,7 @@ def test_assign_owner_to_unit_allows_second_different_owner_co_ownership() -> No
     owner_b = OwnerId.generate()
     unit = Unit(
         id=UnitId.generate(),
+        identifier="4º-2ª",
         participation_coefficient=ParticipationCoefficient(value=Decimal("1")),
         owner_ids=(owner_a,),
     )

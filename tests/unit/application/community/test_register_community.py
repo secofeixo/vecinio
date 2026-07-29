@@ -6,6 +6,7 @@ import pytest
 from src.application.community.register_community import RegisterCommunity, UnitInput
 from src.domain.community.community import (
     DuplicateCifError,
+    DuplicateUnitIdentifierError,
     ParticipationCoefficientSumError,
 )
 from tests.fakes.in_memory_community_repository import InMemoryCommunityRepository
@@ -27,8 +28,12 @@ async def test_registers_community_with_valid_units_and_persists_it() -> None:
     use_case = RegisterCommunity(repository)
     owner_id = uuid4()
     units = [
-        UnitInput(participation_coefficient=Decimal("0.6"), owner_ids=(owner_id,)),
-        UnitInput(participation_coefficient=Decimal("0.4")),
+        UnitInput(
+            participation_coefficient=Decimal("0.6"),
+            identifier="4º-2ª",
+            owner_ids=(owner_id,),
+        ),
+        UnitInput(participation_coefficient=Decimal("0.4"), identifier="Bajo A"),
     ]
 
     community_id = await use_case.execute(
@@ -74,8 +79,8 @@ async def test_propagates_participation_coefficient_sum_error_and_persists_nothi
     repository = InMemoryCommunityRepository()
     use_case = RegisterCommunity(repository)
     units = [
-        UnitInput(participation_coefficient=Decimal("0.5")),
-        UnitInput(participation_coefficient=Decimal("0.4")),
+        UnitInput(participation_coefficient=Decimal("0.5"), identifier="4º-2ª"),
+        UnitInput(participation_coefficient=Decimal("0.4"), identifier="Bajo A"),
     ]
 
     with pytest.raises(ParticipationCoefficientSumError):
@@ -115,11 +120,41 @@ async def test_execute_propagates_value_error_for_duplicate_unit_ids_and_persist
     use_case = RegisterCommunity(repository)
     shared_unit_id = uuid4()
     units = [
-        UnitInput(participation_coefficient=Decimal("0.5"), unit_id=shared_unit_id),
-        UnitInput(participation_coefficient=Decimal("0.5"), unit_id=shared_unit_id),
+        UnitInput(
+            participation_coefficient=Decimal("0.5"),
+            identifier="4º-2ª",
+            unit_id=shared_unit_id,
+        ),
+        UnitInput(
+            participation_coefficient=Decimal("0.5"),
+            identifier="Bajo A",
+            unit_id=shared_unit_id,
+        ),
     ]
 
     with pytest.raises(ValueError):
+        await use_case.execute(
+            name="Edificio Fallido",
+            cif="H12345674",
+            units=units,
+            **address_kwargs(),
+        )
+
+    assert repository.all() == ()
+
+
+@pytest.mark.asyncio
+async def test_execute_propagates_duplicate_unit_identifier_error_and_persists_nothing() -> (
+    None
+):
+    repository = InMemoryCommunityRepository()
+    use_case = RegisterCommunity(repository)
+    units = [
+        UnitInput(participation_coefficient=Decimal("0.5"), identifier="4º-2ª"),
+        UnitInput(participation_coefficient=Decimal("0.5"), identifier="4º-2ª"),
+    ]
+
+    with pytest.raises(DuplicateUnitIdentifierError):
         await use_case.execute(
             name="Edificio Fallido",
             cif="H12345674",
