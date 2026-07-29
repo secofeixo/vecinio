@@ -12,6 +12,10 @@ class UnitRequest(BaseModel):
     owner_ids: list[UUID] = []
 
 
+class AssignOwnerToUnitRequest(BaseModel):
+    owner_id: UUID
+
+
 class CreateCommunityRequest(BaseModel):
     name: str
     street: str

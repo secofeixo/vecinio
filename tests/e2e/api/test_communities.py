@@ -4,6 +4,7 @@ import os
 import subprocess
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
+from uuid import uuid4
 
 import httpx
 import pytest
@@ -173,3 +174,31 @@ async def test_session_rolls_back_after_bad_request_so_next_request_succeeds(
         "/communities", json=_community_payload(cif="A58818501")
     )
     assert retry_response.status_code == 201
+
+
+@pytest.mark.asyncio
+async def test_get_community_returns_200_with_expected_body(
+    client: httpx.AsyncClient,
+) -> None:
+    create_response = await client.post(
+        "/communities", json=_community_payload(cif="H12345674")
+    )
+    community_id = create_response.json()["id"]
+
+    response = await client.get(f"/communities/{community_id}")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["id"] == community_id
+    assert body["name"] == "Edificio Sol"
+    assert body["cif"] == "H12345674"
+
+
+@pytest.mark.asyncio
+async def test_get_community_returns_404_for_nonexistent_id(
+    client: httpx.AsyncClient,
+) -> None:
+    response = await client.get(f"/communities/{uuid4()}")
+
+    assert response.status_code == 404
+    assert "detail" in response.json()
