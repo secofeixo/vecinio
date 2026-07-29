@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from functools import lru_cache
 
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -20,8 +21,11 @@ def _database_url() -> str:
         ) from error
 
 
-engine: AsyncEngine = create_async_engine(_database_url())
+@lru_cache(maxsize=1)
+def get_engine() -> AsyncEngine:
+    return create_async_engine(_database_url())
 
-async_session_factory: async_sessionmaker[AsyncSession] = async_sessionmaker(
-    engine, expire_on_commit=False
-)
+
+@lru_cache(maxsize=1)
+def get_session_factory() -> async_sessionmaker[AsyncSession]:
+    return async_sessionmaker(get_engine(), expire_on_commit=False)
