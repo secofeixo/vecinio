@@ -116,29 +116,56 @@ def _owner_payload(nif: str = "12345678Z", email: str = "jane.doe@example.com") 
     }
 
 
-async def _create_community(client: httpx.AsyncClient, **kwargs: str) -> dict:
-    response = await client.post("/communities", json=_community_payload(**kwargs))
+async def _auth_headers(client: httpx.AsyncClient) -> dict[str, str]:
+    await client.post(
+        "/auth/register",
+        json={"email": "auth-assign@example.com", "password": "s3cret-password"},
+    )
+    login_response = await client.post(
+        "/auth/login",
+        json={"email": "auth-assign@example.com", "password": "s3cret-password"},
+    )
+    token = login_response.json()["access_token"]
+    return {"Authorization": f"Bearer {token}"}
+
+
+@pytest_asyncio.fixture
+async def auth_headers(client: httpx.AsyncClient) -> dict[str, str]:
+    return await _auth_headers(client)
+
+
+async def _create_community(
+    client: httpx.AsyncClient, auth_headers: dict[str, str], **kwargs: str
+) -> dict:
+    response = await client.post(
+        "/communities", json=_community_payload(**kwargs), headers=auth_headers
+    )
     assert response.status_code == 201
     return response.json()
 
 
-async def _create_owner(client: httpx.AsyncClient, **kwargs: str) -> dict:
-    response = await client.post("/owners", json=_owner_payload(**kwargs))
+async def _create_owner(
+    client: httpx.AsyncClient, auth_headers: dict[str, str], **kwargs: str
+) -> dict:
+    response = await client.post(
+        "/owners", json=_owner_payload(**kwargs), headers=auth_headers
+    )
     assert response.status_code == 201
     return response.json()
 
 
 @pytest.mark.asyncio
 async def test_assign_owner_to_unit_returns_200_with_updated_owner_ids(
-    client: httpx.AsyncClient,
+    client: httpx.AsyncClient, auth_headers: dict[str, str]
 ) -> None:
-    community = await _create_community(client)
+    community = await _create_community(client, auth_headers)
     unit_id = community["units"][0]["id"]
-    owner = await _create_owner(client)
+    owner = await _create_owner(client, auth_headers)
 
     response = await client.post(
         f"/communities/{community['id']}/units/{unit_id}/owners",
         json={"owner_id": owner["id"]},
+        headers=auth_headers,
     )
 
     assert response.status_code == 200
@@ -149,13 +176,14 @@ async def test_assign_owner_to_unit_returns_200_with_updated_owner_ids(
 
 @pytest.mark.asyncio
 async def test_assign_owner_to_unit_returns_404_for_nonexistent_community(
-    client: httpx.AsyncClient,
+    client: httpx.AsyncClient, auth_headers: dict[str, str]
 ) -> None:
-    owner = await _create_owner(client)
+    owner = await _create_owner(client, auth_headers)
 
     response = await client.post(
         f"/communities/{uuid4()}/units/{uuid4()}/owners",
         json={"owner_id": owner["id"]},
+        headers=auth_headers,
     )
 
     assert response.status_code == 404
@@ -164,14 +192,15 @@ async def test_assign_owner_to_unit_returns_404_for_nonexistent_community(
 
 @pytest.mark.asyncio
 async def test_assign_owner_to_unit_returns_404_for_nonexistent_unit(
-    client: httpx.AsyncClient,
+    client: httpx.AsyncClient, auth_headers: dict[str, str]
 ) -> None:
-    community = await _create_community(client)
-    owner = await _create_owner(client)
+    community = await _create_community(client, auth_headers)
+    owner = await _create_owner(client, auth_headers)
 
     response = await client.post(
         f"/communities/{community['id']}/units/{uuid4()}/owners",
         json={"owner_id": owner["id"]},
+        headers=auth_headers,
     )
 
     assert response.status_code == 404
@@ -180,14 +209,15 @@ async def test_assign_owner_to_unit_returns_404_for_nonexistent_unit(
 
 @pytest.mark.asyncio
 async def test_assign_owner_to_unit_returns_404_for_nonexistent_owner(
-    client: httpx.AsyncClient,
+    client: httpx.AsyncClient, auth_headers: dict[str, str]
 ) -> None:
-    community = await _create_community(client)
+    community = await _create_community(client, auth_headers)
     unit_id = community["units"][0]["id"]
 
     response = await client.post(
         f"/communities/{community['id']}/units/{unit_id}/owners",
         json={"owner_id": str(uuid4())},
+        headers=auth_headers,
     )
 
     assert response.status_code == 404
@@ -196,22 +226,40 @@ async def test_assign_owner_to_unit_returns_404_for_nonexistent_owner(
 
 @pytest.mark.asyncio
 async def test_assign_owner_to_unit_returns_409_when_already_assigned(
-    client: httpx.AsyncClient,
+    client: httpx.AsyncClient, auth_headers: dict[str, str]
 ) -> None:
-    community = await _create_community(client)
+    community = await _create_community(client, auth_headers)
     unit_id = community["units"][0]["id"]
-    owner = await _create_owner(client)
+    owner = await _create_owner(client, auth_headers)
 
     first_response = await client.post(
         f"/communities/{community['id']}/units/{unit_id}/owners",
         json={"owner_id": owner["id"]},
+        headers=auth_headers,
     )
     assert first_response.status_code == 200
 
     second_response = await client.post(
         f"/communities/{community['id']}/units/{unit_id}/owners",
         json={"owner_id": owner["id"]},
+        headers=auth_headers,
     )
 
     assert second_response.status_code == 409
     assert "detail" in second_response.json()
+
+
+@pytest.mark.asyncio
+async def test_assign_owner_to_unit_without_auth_header_returns_401(
+    client: httpx.AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    community = await _create_community(client, auth_headers)
+    unit_id = community["units"][0]["id"]
+    owner = await _create_owner(client, auth_headers)
+
+    response = await client.post(
+        f"/communities/{community['id']}/units/{unit_id}/owners",
+        json={"owner_id": owner["id"]},
+    )
+
+    assert response.status_code == 401

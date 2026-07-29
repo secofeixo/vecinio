@@ -4,8 +4,9 @@ from fastapi import APIRouter, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.application.owner.register_owner import RegisterOwner
+from src.domain.identity.account import Account
 from src.infrastructure.persistence.owner_repository import PostgresOwnerRepository
-from src.interfaces.api.dependencies import get_session
+from src.interfaces.api.dependencies import get_current_account, get_session
 from src.interfaces.api.schemas.owner_schemas import CreateOwnerRequest, OwnerResponse
 
 router = APIRouter(prefix="/owners", tags=["owners"])
@@ -15,6 +16,7 @@ router = APIRouter(prefix="/owners", tags=["owners"])
 async def register_owner(
     request: CreateOwnerRequest,
     session: AsyncSession = Depends(get_session),  # noqa: B008
+    _: Account = Depends(get_current_account),  # noqa: B008
 ) -> OwnerResponse:
     repository = PostgresOwnerRepository(session)
     use_case = RegisterOwner(repository)

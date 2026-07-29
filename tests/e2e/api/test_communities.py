@@ -93,12 +93,30 @@ def _community_payload(name: str = "Edificio Sol", cif: str = "H12345674") -> di
     }
 
 
+async def _auth_headers(client: httpx.AsyncClient) -> dict[str, str]:
+    await client.post(
+        "/auth/register",
+        json={"email": "auth-communities@example.com", "password": "s3cret-password"},
+    )
+    login_response = await client.post(
+        "/auth/login",
+        json={"email": "auth-communities@example.com", "password": "s3cret-password"},
+    )
+    token = login_response.json()["access_token"]
+    return {"Authorization": f"Bearer {token}"}
+
+
+@pytest_asyncio.fixture
+async def auth_headers(client: httpx.AsyncClient) -> dict[str, str]:
+    return await _auth_headers(client)
+
+
 @pytest.mark.asyncio
 async def test_create_community_returns_201_with_expected_body(
-    client: httpx.AsyncClient,
+    client: httpx.AsyncClient, auth_headers: dict[str, str]
 ) -> None:
     response = await client.post(
-        "/communities", json=_community_payload(cif="H12345674")
+        "/communities", json=_community_payload(cif="H12345674"), headers=auth_headers
     )
 
     assert response.status_code == 201
@@ -119,13 +137,16 @@ async def test_create_community_returns_201_with_expected_body(
 
 @pytest.mark.asyncio
 async def test_duplicate_cif_returns_409_with_json_body(
-    client: httpx.AsyncClient,
+    client: httpx.AsyncClient, auth_headers: dict[str, str]
 ) -> None:
-    await client.post("/communities", json=_community_payload(cif="H12345674"))
+    await client.post(
+        "/communities", json=_community_payload(cif="H12345674"), headers=auth_headers
+    )
 
     response = await client.post(
         "/communities",
         json=_community_payload(name="Edificio Duplicado", cif="H12345674"),
+        headers=auth_headers,
     )
 
     assert response.status_code == 409
@@ -133,9 +154,11 @@ async def test_duplicate_cif_returns_409_with_json_body(
 
 
 @pytest.mark.asyncio
-async def test_invalid_cif_format_returns_400(client: httpx.AsyncClient) -> None:
+async def test_invalid_cif_format_returns_400(
+    client: httpx.AsyncClient, auth_headers: dict[str, str]
+) -> None:
     response = await client.post(
-        "/communities", json=_community_payload(cif="NOT-A-CIF")
+        "/communities", json=_community_payload(cif="NOT-A-CIF"), headers=auth_headers
     )
 
     assert response.status_code == 400
@@ -144,48 +167,52 @@ async def test_invalid_cif_format_returns_400(client: httpx.AsyncClient) -> None
 
 @pytest.mark.asyncio
 async def test_session_rolls_back_after_conflict_so_next_request_succeeds(
-    client: httpx.AsyncClient,
+    client: httpx.AsyncClient, auth_headers: dict[str, str]
 ) -> None:
-    await client.post("/communities", json=_community_payload(cif="H12345674"))
+    await client.post(
+        "/communities", json=_community_payload(cif="H12345674"), headers=auth_headers
+    )
 
     conflict_response = await client.post(
         "/communities",
         json=_community_payload(name="Edificio Duplicado", cif="H12345674"),
+        headers=auth_headers,
     )
     assert conflict_response.status_code == 409
 
     retry_response = await client.post(
         "/communities",
         json=_community_payload(name="Edificio Nuevo", cif="A58818501"),
+        headers=auth_headers,
     )
     assert retry_response.status_code == 201
 
 
 @pytest.mark.asyncio
 async def test_session_rolls_back_after_bad_request_so_next_request_succeeds(
-    client: httpx.AsyncClient,
+    client: httpx.AsyncClient, auth_headers: dict[str, str]
 ) -> None:
     invalid_response = await client.post(
-        "/communities", json=_community_payload(cif="NOT-A-CIF")
+        "/communities", json=_community_payload(cif="NOT-A-CIF"), headers=auth_headers
     )
     assert invalid_response.status_code == 400
 
     retry_response = await client.post(
-        "/communities", json=_community_payload(cif="A58818501")
+        "/communities", json=_community_payload(cif="A58818501"), headers=auth_headers
     )
     assert retry_response.status_code == 201
 
 
 @pytest.mark.asyncio
 async def test_get_community_returns_200_with_expected_body(
-    client: httpx.AsyncClient,
+    client: httpx.AsyncClient, auth_headers: dict[str, str]
 ) -> None:
     create_response = await client.post(
-        "/communities", json=_community_payload(cif="H12345674")
+        "/communities", json=_community_payload(cif="H12345674"), headers=auth_headers
     )
     community_id = create_response.json()["id"]
 
-    response = await client.get(f"/communities/{community_id}")
+    response = await client.get(f"/communities/{community_id}", headers=auth_headers)
 
     assert response.status_code == 200
     body = response.json()
@@ -196,9 +223,29 @@ async def test_get_community_returns_200_with_expected_body(
 
 @pytest.mark.asyncio
 async def test_get_community_returns_404_for_nonexistent_id(
+    client: httpx.AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    response = await client.get(f"/communities/{uuid4()}", headers=auth_headers)
+
+    assert response.status_code == 404
+    assert "detail" in response.json()
+
+
+@pytest.mark.asyncio
+async def test_create_community_without_auth_header_returns_401(
+    client: httpx.AsyncClient,
+) -> None:
+    response = await client.post(
+        "/communities", json=_community_payload(cif="H12345674")
+    )
+
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_get_community_without_auth_header_returns_401(
     client: httpx.AsyncClient,
 ) -> None:
     response = await client.get(f"/communities/{uuid4()}")
 
-    assert response.status_code == 404
-    assert "detail" in response.json()
+    assert response.status_code == 401

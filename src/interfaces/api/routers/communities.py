@@ -12,11 +12,12 @@ from src.application.community.assign_owner_to_unit import (
 from src.application.community.register_community import RegisterCommunity, UnitInput
 from src.domain.community.community import Community
 from src.domain.community.value_objects import CommunityId
+from src.domain.identity.account import Account
 from src.infrastructure.persistence.community_repository import (
     PostgresCommunityRepository,
 )
 from src.infrastructure.persistence.owner_repository import PostgresOwnerRepository
-from src.interfaces.api.dependencies import get_session
+from src.interfaces.api.dependencies import get_current_account, get_session
 from src.interfaces.api.schemas.community_schemas import (
     AddressResponse,
     AssignOwnerToUnitRequest,
@@ -55,6 +56,7 @@ def _to_response(community: Community) -> CommunityResponse:
 async def create_community(
     request: CreateCommunityRequest,
     session: AsyncSession = Depends(get_session),  # noqa: B008
+    _: Account = Depends(get_current_account),  # noqa: B008
 ) -> CommunityResponse:
     repository = PostgresCommunityRepository(session)
     use_case = RegisterCommunity(repository)
@@ -91,6 +93,7 @@ async def create_community(
 async def get_community(
     community_id: UUID,
     session: AsyncSession = Depends(get_session),  # noqa: B008
+    _: Account = Depends(get_current_account),  # noqa: B008
 ) -> CommunityResponse:
     repository = PostgresCommunityRepository(session)
 
@@ -107,6 +110,7 @@ async def assign_owner_to_unit(
     unit_id: UUID,
     request: AssignOwnerToUnitRequest,
     session: AsyncSession = Depends(get_session),  # noqa: B008
+    _: Account = Depends(get_current_account),  # noqa: B008
 ) -> CommunityResponse:
     community_repository = PostgresCommunityRepository(session)
     owner_repository = PostgresOwnerRepository(session)

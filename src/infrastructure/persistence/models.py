@@ -1,8 +1,17 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 
-from sqlalchemy import ForeignKey, Integer, Numeric, String, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Integer,
+    Numeric,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import ARRAY, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -68,3 +77,38 @@ class OwnerModel(Base):
     email: Mapped[str] = mapped_column(String, nullable=False)
     phone: Mapped[str | None] = mapped_column(String, nullable=True)
     version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+
+
+class AccountModel(Base):
+    __tablename__ = "accounts"
+    __table_args__ = (UniqueConstraint("email", name="uq_accounts_email"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    email: Mapped[str] = mapped_column(String, nullable=False)
+    password_hash: Mapped[str] = mapped_column(String, nullable=False)
+    owner_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owners.id", ondelete="SET NULL"), nullable=True
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+
+
+class RefreshTokenModel(Base):
+    __tablename__ = "refresh_tokens"
+    __table_args__ = (
+        UniqueConstraint("token_hash", name="uq_refresh_tokens_token_hash"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("accounts.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    token_hash: Mapped[str] = mapped_column(String, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    revoked: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false"
+    )
