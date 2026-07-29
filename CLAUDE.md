@@ -1,78 +1,156 @@
-# CLAUDE.md — Homeowners Association Management
+# CLAUDE.md — Vecinio: Homeowners Association Management
 
 ## Purpose of this file
-This file is loaded automatically in every Claude Code session. It contains ONLY what
-Claude Code would otherwise need to discover by reading code or asking — not product
-documentation.
+Loaded automatically in every Claude Code session. Contains ONLY what Claude Code
+would otherwise need to discover by reading code or asking — not product docs.
+Kept in sync with the actual codebase; if this file and the code disagree, the
+code wins and this file needs fixing.
 
 ## Tech stack
-- **Backend**: Python 3.12+, FastAPI
-- **Persistence**: PostgreSQL (relational + JSONB where it fits)
-- **Architecture**: Tactical DDD (no CQRS, no Event Sourcing)
-- **Traceability**: Domain Events persisted in `audit_log` + Outbox pattern for future integrations
-- **Frontend**: Vue 3 (Composition API) + Pinia — later phase, do not touch yet
-- **Testing**: pytest (unit), testcontainers (integration against real Postgres), Playwright or httpx (e2e)
+- **Backend**: Python 3.12+, FastAPI, async throughout (SQLAlchemy async +
+  `postgresql+psycopg` driver — single driver, do not add asyncpg alongside it).
+- **Package manager**: `uv` (not poetry, not pip directly). `uv add <pkg>`,
+  `uv run <cmd>`, lockfile is `uv.lock`.
+- **Persistence**: PostgreSQL. Migrations via **Alembic** (async template),
+  `migrations/` — the single source of schema truth. Integration/e2e tests
+  provision schema via `alembic upgrade head`/`downgrade base` against a
+  testcontainers Postgres instance, NOT `Base.metadata.create_all` — this was a
+  deliberate switch made once Alembic was introduced, to avoid two schema
+  sources drifting apart.
+- **Architecture**: Tactical DDD (no CQRS, no Event Sourcing — deliberately
+  rejected; see invariants below).
+- **Auth**: JWT access tokens (short-lived, ~15 min) + opaque refresh tokens
+  (long-lived, hashed at rest, revocable). Password hashing via `pwdlib` +
+  argon2id (NOT passlib — unmaintained, compatibility warnings with modern
+  bcrypt; NOT bcrypt directly — 72-byte silent truncation footgun that argon2id
+  doesn't have).
+- **Frontend**: Vue 3 (Composition API) + Pinia — not started yet.
+- **Testing**: pytest + pytest-asyncio (strict mode, explicit `@pytest.mark.asyncio`,
+  no `asyncio_mode = auto` configured). Unit (no I/O) / integration (real Postgres
+  via testcontainers) / e2e (httpx.AsyncClient against the FastAPI app, same
+  testcontainers+alembic pattern, session overridden via
+  `app.dependency_overrides[get_session]`).
+- **CI**: GitHub Actions (`.github/workflows/ci.yml`), two parallel jobs —
+  `lint` (`pre-commit run --all-files`) and `test` (`pytest tests/unit
+  tests/integration tests/e2e`, needs Docker for testcontainers). Both have
+  `timeout-minutes: 15`. Jobs run in parallel by deliberate choice (not
+  `needs: lint`) — trade-off accepted: faster feedback over saving CI minutes.
+- **Not yet implemented, despite folders existing**: `src/infrastructure/persistence/audit_log.py`
+  and `src/infrastructure/outbox/outbox_repository.py` are still empty stub
+  files. Domain events + outbox pattern were the plan for future audit/integration
+  needs but have not been built. Do not assume they work.
 
-## Architecture: layers and dependencies
-```
-domain/        → Entities, Value Objects, Aggregates, Domain Events, repository interfaces.
-                 ZERO external dependencies (no FastAPI, no SQLAlchemy, no infra of any kind).
-application/   → Use cases (command/query handlers). Orchestrates the domain. No business rules here.
-infrastructure/→ Repository implementations (SQLAlchemy/Postgres), outbox, external adapters.
-interfaces/    → FastAPI routers, Pydantic input/output schemas, DTO ↔ domain mapping.
-```
-Dependency rule: `interfaces` → `application` → `domain` ← `infrastructure`.
-The domain layer NEVER imports from `infrastructure` or `interfaces`.
+## Bounded contexts implemented so far
+- **community**: `Community` aggregate (units, CIF, address), `Unit` entity
+  (participation coefficient, owner_ids, `identifier` — human-readable label like
+  "4º-2ª", required + non-empty, unique per community).
+- **owner**: `Owner` aggregate (NIF/NIE, email, phone — independent identity,
+  no login).
+- **identity**: `Account` aggregate (email, password_hash, optional `owner_id`
+  link) + `RefreshToken`. Separate bounded context from `owner` — an Account is
+  a login credential, an Owner is a legal/business identity; they are linked by
+  ID, never merged. **Decision**: one Account per person (co-owners each get
+  their own Account + Owner + NIF), not a single shared "family" login — chosen
+  for traceability of who did what.
 
 ## Business invariants already decided (do not reopen without explicit confirmation)
 - `Owner` is an independent aggregate (own identity, can belong to 0..N communities).
-- `Unit` is an entity INSIDE the `Community` aggregate (not its own aggregate), because the invariant
-  "sum of participation coefficients of all units = 100%" requires transactional consistency.
-- `Unit.owner_ids` is a list (co-ownership supported). JOINT AND SEVERAL liability:
-  each co-owner is liable for 100% of that unit's dues; liability is NOT split proportionally.
-- Invariant validation lives in aggregate methods, NEVER in the FastAPI router or the use case.
-  Every entry point into the system (API, batch import, scheduled job) must go through the aggregate.
+- `Unit` is an entity INSIDE the `Community` aggregate (not its own aggregate),
+  because the invariant "sum of participation coefficients of all units = 100%"
+  requires transactional consistency.
+- `Unit.owner_ids` is a tuple (co-ownership supported). JOINT AND SEVERAL liability:
+  each co-owner is liable for 100% of that unit's dues; liability is NOT split
+  proportionally.
+- `Unit.identifier` must be non-empty and unique within its Community
+  (`DuplicateUnitIdentifierError`, mapped to HTTP 400 — a same-payload
+  consistency check, not a conflict with persisted state, hence 400 not 409,
+  consistent with the existing duplicate-unit-id check).
+- CIF/NIF/NIE validation follows the real Spanish checksum algorithms (verified
+  against official sources during implementation — do not "simplify" these).
+- Invariant validation lives in aggregate methods, NEVER in the FastAPI router
+  or the use case. Every entry point into the system (API, batch import,
+  scheduled job) must go through the aggregate.
+- **Optimistic concurrency**: `Community`, `Owner`, and `Account` all carry a
+  `version: int` field. Repository `save()` does an upsert with
+  `WHERE <table>.version = <expected_version>`, detects a skipped update via
+  `RETURNING` (NOT `rowcount` — unreliable/`-1` with async psycopg on
+  `ON CONFLICT ... WHERE`), and raises a per-aggregate `ConcurrentModificationError`
+  (mapped to HTTP 412) if the version doesn't match. Any new mutable aggregate
+  needs this same pattern.
+- **IntegrityError handling**: any repository `save()` that can hit a DB-level
+  UNIQUE constraint must catch `IntegrityError`, call `await session.rollback()`
+  UNCONDITIONALLY as the first statement in the `except` block (before either
+  raise path — an uncommitted DBAPI error leaves the connection aborted until
+  rolled back), then inspect `error.orig.diag.constraint_name` (not string-matching
+  the message) to decide whether to translate to a domain error or re-raise.
+- Login (`InvalidCredentialsError`) and any future "does this identifier exist"
+  check must return the IDENTICAL error/message for "not found" and "wrong
+  credential" cases — never let a caller distinguish them, or it becomes an
+  enumeration oracle.
 
 ## Coding conventions
-- Value Objects are immutable (`@dataclass(frozen=True)` or `pydantic.BaseModel` with `frozen=True`).
-- Repositories are defined as interfaces (Protocol/ABC) in `domain/`, implemented in `infrastructure/`.
-- One use case = one class with a single `execute()` method. Do not merge two use cases into one handler.
-- Domain IDs are typed Value Objects (`CommunityId`, `OwnerId`), never a bare `str` or `UUID`
-  crossing layers.
-- Everything — domain concepts, aggregates, events, use cases, comments, variable names — is in
-  English. Exceptions: `CIF` and `NIF` (Spanish legal identifiers with no English equivalent) keep
-  their original names as domain-specific Value Objects.
+- Value Objects/Entities/Aggregates are immutable-by-default pydantic
+  `BaseModel` (`frozen=True`); aggregate roots that mutate use
+  `validate_assignment=True` instead of `frozen=True` (see pydantic exception
+  below).
+- Repositories are defined as interfaces (ABC) in `domain/`, implemented in
+  `infrastructure/`. All repository methods are `async def`.
+- One use case = one class with a single `execute()` method. Do not merge two
+  use cases into one handler. Domain exceptions propagate through use cases
+  unchanged — never caught/re-wrapped/swallowed there.
+- Domain IDs are typed Value Objects (`CommunityId`, `OwnerId`, `AccountId`,
+  etc.), never a bare `str` or `UUID` crossing layers — EXCEPT at the
+  application-layer `execute()` boundary, which takes raw primitives (str,
+  UUID, Decimal) and constructs Value Objects internally, mirroring
+  `RegisterCommunity`'s convention.
+- Everything — domain concepts, aggregates, events, use cases, comments,
+  variable names — is in English. Exceptions: `CIF` and `NIF`/`NIE` (Spanish
+  legal identifiers with no English equivalent) keep their original names.
+- Cross-aggregate existence checks (e.g. "does this Owner exist before linking
+  it") belong in the application-layer use case, never inside the aggregate
+  itself — an aggregate can only validate itself, not query other aggregates'
+  repositories.
 
 ## Commands
-- Install dependencies: `poetry install` (or `pip install -r requirements.txt`, decide package manager before the first task)
-- Unit tests: `pytest tests/unit`
-- Integration tests: `pytest tests/integration` (requires Docker running, uses testcontainers)
-- E2E tests: `pytest tests/e2e`
-- Run local API: `uvicorn src.interfaces.api.main:app --reload`
+- Install dependencies: `uv sync`
+- Add a dependency: `uv add <package>`
+- Unit tests: `uv run pytest tests/unit`
+- Integration tests: `uv run pytest tests/integration` (requires Docker; uses
+  testcontainers + real Alembic migrations)
+- E2E tests: `uv run pytest tests/e2e` (requires Docker)
+- Full suite: `uv run pytest tests`
+- Run local API: `uv run uvicorn src.interfaces.api.main:app --reload`
+  (requires `DATABASE_URL` and `JWT_SECRET_KEY` env vars set)
+- New migration: `uv run alembic revision --autogenerate -m "description"` —
+  ALWAYS read the generated file and verify it against the actual model
+  definitions before trusting it; autogenerate has been wrong before
+  (missing constraints, wrong precision).
+- Apply migrations: `uv run alembic upgrade head`
+- Pre-commit (all hooks, forced): `uv run pre-commit run --all-files`
+- **Note**: `.pre-commit-config.yaml` has `exclude: ^migrations/` — this means
+  NO hook (black, isort, flake8, mypy, pydocstyle, complexipy, detect-secrets)
+  has ever actually checked any file under `migrations/versions/`, for any
+  migration, ever. This is a known, accepted gap, not yet revisited.
 
 ## Domain purity exception: pydantic
-`domain/` uses `pydantic.BaseModel` (with `frozen=True`) for Entities and Value Objects.
-This is a deliberate, accepted exception to "pure Python domain" — decided for the
-concrete benefits below, not as a general license to add dependencies to `domain/`:
-- Declarative validation at construction time (invariants enforced without hand-written
-  `__post_init__` boilerplate).
-- Immutability and hashability out of the box (needed for VO equality and for using
-  IDs in sets/dicts, e.g. duplicate-unit-id checks).
-- Free JSON (de)serialization when domain objects cross into `interfaces/` — though
-  domain objects should still not be returned directly from API responses; map to schemas.
-
-Trade-off accepted knowingly: pydantic controls the validation lifecycle
-(`model_validator`, `validate_assignment`) instead of the developer deciding explicitly
-when each rule fires. This is less control, not more flexibility — do not cite
-"flexibility" as the reason if this decision is revisited later.
-
-This exception applies ONLY to pydantic. It does not extend to ORMs, HTTP clients, or
-any other infrastructure-flavored library. Any other proposed dependency in `domain/`
-requires the same explicit trade-off discussion as this one — it is not pre-approved
-by this precedent.
+`domain/` uses `pydantic.BaseModel` for Entities, Value Objects, and Aggregates.
+Deliberate, accepted exception to "pure Python domain" — for declarative
+validation, immutability/hashability, and free JSON serialization at the
+`interfaces/` boundary. Trade-off accepted knowingly: pydantic controls the
+validation lifecycle instead of the developer deciding explicitly when each
+rule fires — this is less control, not more flexibility; don't cite
+"flexibility" as the reason if revisited. Applies ONLY to pydantic — does not
+extend to ORMs, HTTP clients, or any other infrastructure-flavored library.
+Any other proposed domain dependency needs the same explicit trade-off
+discussion.
 
 ## Do NOT do without asking
 - Do not introduce CQRS, Event Sourcing, or a second database.
-- Do not add dependencies to `domain/` beyond pydantic (see exception above) without
-  discussing the specific trade-off first.
-- Do not touch `frontend/` yet — out of scope until the backend has stable use cases.
+- Do not add dependencies to `domain/` beyond pydantic without discussing the
+  specific trade-off first.
+- Do not touch `frontend/` yet — out of scope until the backend has stable use
+  cases covering more of the real domain (quotas, incidents, votes).
+- Do not add `asyncpg` — the project standardized on `psycopg` (async) as the
+  single Postgres driver.
+- Do not use `passlib` for anything — unmaintained, already replaced by
+  `pwdlib`.
