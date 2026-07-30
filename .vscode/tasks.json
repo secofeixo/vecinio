@@ -5,7 +5,7 @@
       "label": "Test: Unit",
       "type": "shell",
       "command": "uv",
-      "args": ["run", "pytest", "tests/unit", "-v"],
+      "args": ["run", "pytest", "tests/unit", "-v", "--durations=0"],
       "group": "test",
       "presentation": { "reveal": "always", "panel": "dedicated" },
       "problemMatcher": []
@@ -14,7 +14,7 @@
       "label": "Test: Integration",
       "type": "shell",
       "command": "uv",
-      "args": ["run", "pytest", "tests/integration", "-v"],
+      "args": ["run", "pytest", "tests/integration", "-v", "--durations=0"],
       "group": "test",
       "presentation": { "reveal": "always", "panel": "dedicated" },
       "problemMatcher": []
@@ -23,7 +23,7 @@
       "label": "Test: E2E",
       "type": "shell",
       "command": "uv",
-      "args": ["run", "pytest", "tests/e2e", "-v"],
+      "args": ["run", "pytest", "tests/e2e", "-v", "--durations=0"],
       "group": "test",
       "presentation": { "reveal": "always", "panel": "dedicated" },
       "problemMatcher": []
@@ -32,7 +32,7 @@
       "label": "Test: All",
       "type": "shell",
       "command": "uv",
-      "args": ["run", "pytest", "tests", "-v"],
+      "args": ["run", "pytest", "tests", "-v", "--durations=0"],
       "group": "test",
       "presentation": { "reveal": "always", "panel": "dedicated" },
       "problemMatcher": []
