@@ -24,6 +24,13 @@ from src.application.identity.refresh_access_token import InvalidRefreshTokenErr
 from src.application.identity.register_account import (
     OwnerNotFoundError as AccountOwnerNotFoundError,
 )
+from src.application.quota.create_quota import (
+    CommunityNotFoundError as CreateQuotaCommunityNotFoundError,
+)
+from src.application.quota.create_quota import (
+    OverlappingOrdinaryQuotaError,
+    QuotaNotFoundError,
+)
 from src.domain.community.community import (
     ConcurrentModificationError as CommunityConcurrentModificationError,
 )
@@ -55,6 +62,15 @@ from src.domain.owner.owner import (
     ConcurrentModificationError as OwnerConcurrentModificationError,
 )
 from src.domain.owner.owner import DuplicateNifError
+from src.domain.quota.quota import (
+    ConcurrentModificationError as QuotaConcurrentModificationError,
+)
+from src.domain.quota.quota import (
+    EmptyQuotaAllocationsError,
+    EmptyQuotaLinesError,
+    InvalidQuotaPeriodError,
+    InvalidQuotaTotalError,
+)
 
 
 def _error_response(status_code: int, exc: Exception) -> JSONResponse:
@@ -97,6 +113,8 @@ def register_exception_handlers(app: FastAPI) -> None:
     )
     app.add_exception_handler(RemoveCommunityGroupNotFoundError, _handle_not_found)
     app.add_exception_handler(CommunityGroupCommunityNotMemberError, _handle_not_found)
+    app.add_exception_handler(CreateQuotaCommunityNotFoundError, _handle_not_found)
+    app.add_exception_handler(QuotaNotFoundError, _handle_not_found)
 
     app.add_exception_handler(DuplicateCifError, _handle_conflict)
     app.add_exception_handler(DuplicateNifError, _handle_conflict)
@@ -116,6 +134,9 @@ def register_exception_handlers(app: FastAPI) -> None:
     app.add_exception_handler(
         CommunityGroupConcurrentModificationError, _handle_concurrent_modification
     )
+    app.add_exception_handler(
+        QuotaConcurrentModificationError, _handle_concurrent_modification
+    )
 
     app.add_exception_handler(InvalidCredentialsError, _handle_unauthorized)
     app.add_exception_handler(InvalidRefreshTokenError, _handle_unauthorized)
@@ -126,4 +147,9 @@ def register_exception_handlers(app: FastAPI) -> None:
     app.add_exception_handler(
         CommunityGroupBelowMinimumMembersError, _handle_value_error
     )
+    app.add_exception_handler(OverlappingOrdinaryQuotaError, _handle_value_error)
+    app.add_exception_handler(EmptyQuotaLinesError, _handle_value_error)
+    app.add_exception_handler(InvalidQuotaTotalError, _handle_value_error)
+    app.add_exception_handler(EmptyQuotaAllocationsError, _handle_value_error)
+    app.add_exception_handler(InvalidQuotaPeriodError, _handle_value_error)
     app.add_exception_handler(ValueError, _handle_value_error)

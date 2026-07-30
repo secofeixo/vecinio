@@ -64,6 +64,22 @@ code wins and this file needs fixing.
   the LPH does not impose exclusivity on mancomunidad membership, so nothing
   in the domain prevents it. No governance/presidency concept exists yet
   (see the presidency-invariant bullet under "Business invariants" below).
+- **quota**: `Quota` aggregate — a snapshot split of an amount across a
+  `Community`'s `Unit`s at a point in time (`period_start`/`period_end`,
+  `type` = `ordinary`/`extraordinary`). `lines` (concept + `Decimal` amount,
+  no sign restriction) drive `total`, a `@computed_field` derived as
+  `sum(lines)` — never an independent input, same pattern as
+  `CommunityGroup.slug`. `allocations` is an immutable snapshot, one
+  `QuotaAllocation` per `Unit` existing in the `Community` at creation time
+  (`unit_id`, `participation_coefficient`, `amount` — all frozen values, never
+  recalculated against current `Unit` state). Allocation uses the
+  **largest-remainder method** (`src/domain/quota/allocation.py`,
+  `allocate_largest_remainder`, a pure function, not a `Quota` method — kept
+  standalone because building it requires reading all of a `Community`'s
+  current units, a cross-aggregate concern). **Increment scope**: creation
+  only — no billing, payment/periodicity, or the recalculation/superseding
+  use case yet; `supersedes_quota_id` exists on the model but nothing sets or
+  reads it.
 
 ## Business invariants already decided (do not reopen without explicit confirmation)
 - `Owner` is an independent aggregate (own identity, can belong to 0..N communities).
@@ -98,8 +114,8 @@ code wins and this file needs fixing.
 - Invariant validation lives in aggregate methods, NEVER in the FastAPI router
   or the use case. Every entry point into the system (API, batch import,
   scheduled job) must go through the aggregate.
-- **Optimistic concurrency**: `Community`, `Owner`, `Account`, and
-  `CommunityGroup` all carry a `version: int` field. Repository `save()` does an upsert with
+- **Optimistic concurrency**: `Community`, `Owner`, `Account`,
+  `CommunityGroup`, and `Quota` all carry a `version: int` field. Repository `save()` does an upsert with
   `WHERE <table>.version = <expected_version>`, detects a skipped update via
   `RETURNING` (NOT `rowcount` — unreliable/`-1` with async psycopg on
   `ON CONFLICT ... WHERE`), and raises a per-aggregate `ConcurrentModificationError`
@@ -115,6 +131,25 @@ code wins and this file needs fixing.
   check must return the IDENTICAL error/message for "not found" and "wrong
   credential" cases — never let a caller distinguish them, or it becomes an
   enumeration oracle.
+- An ordinary `Quota`'s period must not overlap another ordinary `Quota` of
+  the SAME `Community` (inclusive on both bounds — a shared boundary day,
+  e.g. one ending 2026-12-31 and another starting 2026-12-31, counts as
+  overlapping). Checked in the `CreateQuota` use case via
+  `QuotaRepository.exists_overlapping_ordinary` (an aggregate can only
+  validate itself, not query other persisted `Quota` rows), raising
+  `OverlappingOrdinaryQuotaError` (HTTP 400). `extraordinary` quotas are never
+  checked against anything — they can freely coexist with any other quota,
+  ordinary or extraordinary, same or different period.
+  **Deliberate exception to the project's DB-guaranteed-uniqueness pattern**
+  (`Unit.identifier`, `CommunityGroup.slug`): this overlap invariant is
+  backed only by a plain (non-unique) index on `(community_id, type,
+  period_start, period_end)` for query efficiency, NOT by a DB-level
+  uniqueness/exclusion constraint. Two concurrent `POST` requests creating
+  overlapping ordinary quotas for the same community can both succeed (an
+  accepted race window) — accepted given expected write volume (ordinary-quota
+  creation is at most an annual event per community). If write volume ever
+  grows enough to matter, the correct fix is a Postgres `EXCLUDE` constraint
+  using the `btree_gist` extension, not tightening the use-case check alone.
 
 ## Coding conventions
 - Value Objects/Entities/Aggregates are immutable-by-default pydantic
@@ -130,7 +165,11 @@ code wins and this file needs fixing.
   etc.), never a bare `str` or `UUID` crossing layers — EXCEPT at the
   application-layer `execute()` boundary, which takes raw primitives (str,
   UUID, Decimal) and constructs Value Objects internally, mirroring
-  `RegisterCommunity`'s convention.
+  `RegisterCommunity`'s convention. Narrow exception: `CreateQuota.execute()`
+  takes `type: QuotaType` (the enum itself), not `str` — the Pydantic API
+  schema (`CreateQuotaRequest.type: QuotaType`) already validates it at the
+  HTTP boundary (FastAPI returns 422 on an invalid value), so there is no
+  primitive-to-domain conversion left for the use case to do.
 - Everything — domain concepts, aggregates, events, use cases, comments,
   variable names — is in English. Exceptions: `CIF` and `NIF`/`NIE` (Spanish
   legal identifiers with no English equivalent) keep their original names.

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlalchemy import (
     Boolean,
+    Date,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
@@ -104,6 +106,85 @@ class CommunityGroupModel(Base):
         ARRAY(UUID(as_uuid=True)), nullable=False, default=list
     )
     version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+
+
+class QuotaModel(Base):
+    __tablename__ = "quotas"
+    __table_args__ = (
+        Index(
+            "ix_quotas_community_type_period",
+            "community_id",
+            "type",
+            "period_start",
+            "period_end",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    community_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("communities.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    type: Mapped[str] = mapped_column(String, nullable=False)
+    period_start: Mapped[date] = mapped_column(Date, nullable=False)
+    period_end: Mapped[date] = mapped_column(Date, nullable=False)
+    total: Mapped[str] = mapped_column(Numeric, nullable=False)
+    supersedes_quota_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("quotas.id", ondelete="SET NULL"), nullable=True
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+
+    lines: Mapped[list[QuotaLineModel]] = relationship(
+        back_populates="quota", cascade="all, delete-orphan"
+    )
+    allocations: Mapped[list[QuotaAllocationModel]] = relationship(
+        back_populates="quota", cascade="all, delete-orphan"
+    )
+
+
+class QuotaLineModel(Base):
+    __tablename__ = "quota_lines"
+    __table_args__ = (
+        UniqueConstraint("quota_id", "position", name="uq_quota_lines_quota_position"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    quota_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("quotas.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    concept: Mapped[str] = mapped_column(String, nullable=False)
+    amount: Mapped[str] = mapped_column(Numeric, nullable=False)
+
+    quota: Mapped[QuotaModel] = relationship(back_populates="lines")
+
+
+class QuotaAllocationModel(Base):
+    __tablename__ = "quota_allocations"
+    __table_args__ = (
+        UniqueConstraint(
+            "quota_id", "position", name="uq_quota_allocations_quota_position"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    quota_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("quotas.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    unit_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    participation_coefficient: Mapped[str] = mapped_column(Numeric, nullable=False)
+    amount: Mapped[str] = mapped_column(Numeric, nullable=False)
+
+    quota: Mapped[QuotaModel] = relationship(back_populates="allocations")
 
 
 class RefreshTokenModel(Base):
