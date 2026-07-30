@@ -52,6 +52,18 @@ code wins and this file needs fixing.
   ID, never merged. **Decision**: one Account per person (co-owners each get
   their own Account + Owner + NIF), not a single shared "family" login — chosen
   for traceability of who did what.
+- **community_group**: `CommunityGroup` aggregate — Spanish legal figure
+  "mancomunidad de propietarios" (LPH), e.g. two communities like "206" and
+  "208" that share certain governance bodies. References member `Community`
+  aggregates by ID (`member_community_ids`), does NOT contain them — each
+  `Community` keeps its own transactional 100%-coefficient invariant.
+  Independent aggregate, own bounded context. `slug` is a computed property
+  derived from `name` (not stored input), persisted with a UNIQUE constraint.
+  **Decision**: no exclusivity invariant between groups — a `Community` can
+  belong to more than one `CommunityGroup` at the same time, deliberately;
+  the LPH does not impose exclusivity on mancomunidad membership, so nothing
+  in the domain prevents it. No governance/presidency concept exists yet
+  (see the presidency-invariant bullet under "Business invariants" below).
 
 ## Business invariants already decided (do not reopen without explicit confirmation)
 - `Owner` is an independent aggregate (own identity, can belong to 0..N communities).
@@ -67,11 +79,27 @@ code wins and this file needs fixing.
   consistent with the existing duplicate-unit-id check).
 - CIF/NIF/NIE validation follows the real Spanish checksum algorithms (verified
   against official sources during implementation — do not "simplify" these).
+- `CommunityGroup.member_community_ids` requires a minimum of 2 members, no
+  duplicates, enforced on every mutation (`add_member`/`remove_member`), not
+  just at construction. `slug` is NEVER a settable field — always derived from
+  `name` (NFKD-normalize, strip Unicode category `Mn`, lowercase, non
+  `[a-z0-9]` chars → `-`, collapse/trim hyphens) and persisted with a UNIQUE
+  DB constraint; a `name` that normalizes to an empty slug is rejected
+  (`InvalidCommunityGroupNameError`).
+- `CommunityGroup` has no membership-exclusivity invariant (see
+  "community_group" above) and no presidency invariant. The presidency rule
+  ("the mancomunidad's president must be president of one of its member
+  communities") is a deliberately deferred cross-aggregate application-layer
+  check — it cannot live inside `CommunityGroup` itself, since an aggregate
+  can only validate itself, not query another `Community`'s presidency.
+  Blocked on a `governance` bounded context that doesn't exist yet (no
+  president/role concept anywhere in the domain today) — do not add a
+  presidency check to `CommunityGroup` without `governance` existing first.
 - Invariant validation lives in aggregate methods, NEVER in the FastAPI router
   or the use case. Every entry point into the system (API, batch import,
   scheduled job) must go through the aggregate.
-- **Optimistic concurrency**: `Community`, `Owner`, and `Account` all carry a
-  `version: int` field. Repository `save()` does an upsert with
+- **Optimistic concurrency**: `Community`, `Owner`, `Account`, and
+  `CommunityGroup` all carry a `version: int` field. Repository `save()` does an upsert with
   `WHERE <table>.version = <expected_version>`, detects a skipped update via
   `RETURNING` (NOT `rowcount` — unreliable/`-1` with async psycopg on
   `ON CONFLICT ... WHERE`), and raises a per-aggregate `ConcurrentModificationError`

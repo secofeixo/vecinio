@@ -93,6 +93,19 @@ class AccountModel(Base):
     version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
 
 
+class CommunityGroupModel(Base):
+    __tablename__ = "community_groups"
+    __table_args__ = (UniqueConstraint("slug", name="uq_community_groups_slug"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    slug: Mapped[str] = mapped_column(String, nullable=False)
+    member_community_ids: Mapped[list[uuid.UUID]] = mapped_column(
+        ARRAY(UUID(as_uuid=True)), nullable=False, default=list
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+
+
 class RefreshTokenModel(Base):
     __tablename__ = "refresh_tokens"
     __table_args__ = (

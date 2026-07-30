@@ -23,22 +23,19 @@ acción. Ya no requiere cambios de esquema; solo asegurarse de que el flujo de
 alta se use una vez por persona real.
 
 ### Mancomunidades (agrupación de comunidades — ej. "206-208")
-Caso real: dos comunidades independientes (206 y 208) comparten ciertos
-órganos de gobierno (presidencia rotativa entre ambas). Análisis:
-- NO debe modelarse como `Community` conteniendo otras `Community` — rompería
-  el límite de agregado (cada `Community` ya tiene su propio invariante
-  transaccional de coeficientes al 100%).
-- Debería ser un **agregado nuevo e independiente**, tentativamente
-  `CommunityGroup` (nombre real en España: "mancomunidad de propietarios",
-  figura reconocida en la LPH) — referencia a `Community` por ID, no las
-  contiene.
-- Invariante pendiente de diseñar: "el presidente de la mancomunidad debe ser
-  presidente de una de las comunidades miembro" — no puede vivir dentro del
-  agregado solo, porque `CommunityGroup` no puede consultar quién es
-  presidente de otra `Community` por sí mismo; sería una comprobación de
-  aplicación (mismo patrón que `AssignOwnerToUnit` verificando que el `Owner`
-  existe).
-- Estado: analizado, no implementado. Prioridad: media — no urgente hoy.
+La estructura base ya está implementada: `CommunityGroup` (bounded context
+`community_group`, ver `CLAUDE.md`) — agregado independiente, referencia a
+`Community` por ID, no las contiene. Pendiente de construir todavía:
+- Invariante "el presidente de la mancomunidad debe ser presidente de una de
+  las comunidades miembro" — no puede vivir dentro del agregado
+  `CommunityGroup` solo, porque no puede consultar quién es presidente de
+  otra `Community` por sí mismo; sería una comprobación de aplicación (mismo
+  patrón que `AssignOwnerToUnit` verificando que el `Owner` existe). Bloqueada
+  por "Roles de gobierno" (más abajo) — no existe el concepto de presidente
+  todavía en ningún lado.
+- Estado: base construida, invariante de presidencia sin implementar (fuera
+  de alcance del trabajo hecho, deliberadamente). Prioridad: media — no
+  urgente hoy.
 
 ### Roles de gobierno (presidente, tesorero, administrador de fincas externo)
 - Hoy el dominio no tiene ningún concepto de rol dentro de una comunidad.
@@ -57,7 +54,8 @@ Caso real: dos comunidades independientes (206 y 208) comparten ciertos
 ## Próximos pasos posibles (sin decidir orden)
 - Endpoint `GET /owners/me/units` (o similar) para que un `Owner` autenticado
   vea sus viviendas — pendiente de revisar si falta.
-- `CommunityGroup` (mancomunidades).
+- Invariante de presidencia en `CommunityGroup` (mancomunidades) — bloqueada
+  por `governance`.
 - `governance` (roles).
 - Bounded contexts de negocio nuevos: cuotas, incidencias, votaciones.
 - Frontend Vue — no iniciado.

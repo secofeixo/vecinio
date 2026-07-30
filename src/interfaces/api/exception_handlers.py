@@ -7,6 +7,18 @@ from src.application.community.assign_owner_to_unit import (
     CommunityNotFoundError,
     OwnerNotFoundError,
 )
+from src.application.community_group.add_community_to_group import (
+    CommunityGroupNotFoundError as AddCommunityGroupNotFoundError,
+)
+from src.application.community_group.add_community_to_group import (
+    CommunityNotFoundError as AddCommunityGroupCommunityNotFoundError,
+)
+from src.application.community_group.create_community_group import (
+    CommunityNotFoundError as CreateCommunityGroupCommunityNotFoundError,
+)
+from src.application.community_group.remove_community_from_group import (
+    CommunityGroupNotFoundError as RemoveCommunityGroupNotFoundError,
+)
 from src.application.identity.login import InvalidCredentialsError
 from src.application.identity.refresh_access_token import InvalidRefreshTokenError
 from src.application.identity.register_account import (
@@ -20,6 +32,20 @@ from src.domain.community.community import (
     DuplicateUnitIdentifierError,
     OwnerAlreadyAssignedError,
     UnitNotFoundError,
+)
+from src.domain.community_group.community_group import (
+    CommunityAlreadyMemberError,
+    CommunityGroupBelowMinimumMembersError,
+)
+from src.domain.community_group.community_group import (
+    CommunityNotMemberError as CommunityGroupCommunityNotMemberError,
+)
+from src.domain.community_group.community_group import (
+    ConcurrentModificationError as CommunityGroupConcurrentModificationError,
+)
+from src.domain.community_group.community_group import (
+    DuplicateCommunityGroupSlugError,
+    InvalidCommunityGroupNameError,
 )
 from src.domain.identity.account import (
     ConcurrentModificationError as AccountConcurrentModificationError,
@@ -62,11 +88,21 @@ def register_exception_handlers(app: FastAPI) -> None:
     app.add_exception_handler(OwnerNotFoundError, _handle_not_found)
     app.add_exception_handler(UnitNotFoundError, _handle_not_found)
     app.add_exception_handler(AccountOwnerNotFoundError, _handle_not_found)
+    app.add_exception_handler(AddCommunityGroupNotFoundError, _handle_not_found)
+    app.add_exception_handler(
+        AddCommunityGroupCommunityNotFoundError, _handle_not_found
+    )
+    app.add_exception_handler(
+        CreateCommunityGroupCommunityNotFoundError, _handle_not_found
+    )
+    app.add_exception_handler(RemoveCommunityGroupNotFoundError, _handle_not_found)
+    app.add_exception_handler(CommunityGroupCommunityNotMemberError, _handle_not_found)
 
     app.add_exception_handler(DuplicateCifError, _handle_conflict)
     app.add_exception_handler(DuplicateNifError, _handle_conflict)
     app.add_exception_handler(OwnerAlreadyAssignedError, _handle_conflict)
     app.add_exception_handler(DuplicateEmailError, _handle_conflict)
+    app.add_exception_handler(CommunityAlreadyMemberError, _handle_conflict)
 
     app.add_exception_handler(
         CommunityConcurrentModificationError, _handle_concurrent_modification
@@ -77,9 +113,17 @@ def register_exception_handlers(app: FastAPI) -> None:
     app.add_exception_handler(
         AccountConcurrentModificationError, _handle_concurrent_modification
     )
+    app.add_exception_handler(
+        CommunityGroupConcurrentModificationError, _handle_concurrent_modification
+    )
 
     app.add_exception_handler(InvalidCredentialsError, _handle_unauthorized)
     app.add_exception_handler(InvalidRefreshTokenError, _handle_unauthorized)
 
     app.add_exception_handler(DuplicateUnitIdentifierError, _handle_value_error)
+    app.add_exception_handler(DuplicateCommunityGroupSlugError, _handle_value_error)
+    app.add_exception_handler(InvalidCommunityGroupNameError, _handle_value_error)
+    app.add_exception_handler(
+        CommunityGroupBelowMinimumMembersError, _handle_value_error
+    )
     app.add_exception_handler(ValueError, _handle_value_error)
