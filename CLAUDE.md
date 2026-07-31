@@ -39,6 +39,12 @@ code wins and this file needs fixing.
   and `src/infrastructure/outbox/outbox_repository.py` are still empty stub
   files. Domain events + outbox pattern were the plan for future audit/integration
   needs but have not been built. Do not assume they work.
+- **Local dev DB**: `docker-compose.yml` runs a Postgres service (`db`, port
+  5433 on the host) for manual/local work (e.g. running `alembic
+  revision --autogenerate` by hand). This is separate from the testcontainers
+  Postgres instances spun up automatically by integration/e2e tests — don't
+  confuse the two, and don't leave the docker-compose `db` container running
+  after manual migration work (`docker compose down` when done).
 
 ## Bounded contexts implemented so far
 - **community**: `Community` aggregate (units, CIF, address), `Unit` entity
@@ -80,6 +86,76 @@ code wins and this file needs fixing.
   only — no billing, payment/periodicity, or the recalculation/superseding
   use case yet; `supersedes_quota_id` exists on the model but nothing sets or
   reads it.
+- **vote**: community consultations/votes (approve a budget, a special levy,
+  a solar-panel study, etc.). Two aggregates plus one pure calculation
+  function:
+  - `Vote` (aggregate root, `validate_assignment=True`): `community_id`,
+    `title`, `description`, `options: tuple[VoteOption, ...] = Field(frozen=True)`
+    (minimum 2, unique labels, fixed at creation — a `Vote` cannot add/remove
+    options later), `end_date`, `created_by_account_id`, `result:
+    VoteResult | None = None` (the only mutable field besides `version`),
+    `version: int = 0`. Built via `Vote.create(..., now: datetime)` — `now` is
+    an injected clock parameter (not a stored field), needed because
+    `end_date` must be strictly in the future only *at creation time*
+    (`VoteEndDateNotInFutureError`); a stored past-dated `Vote` rehydrated
+    from persistence must NOT re-fail this check on load, hence it lives in
+    `create()`, not in the `model_validator`. `close(result: VoteResult)`
+    sets `result` once; raises `VoteAlreadyClosedError` on a second call —
+    this is the aggregate's own invariant (never cerrar dos veces); whether
+    `end_date` has actually passed is checked by the `CloseVote` use case,
+    not by the aggregate.
+  - `VoteOption` (frozen VO): `id: VoteOptionId`, `label: str` (non-empty).
+  - `Ballot` — **its own aggregate**, not an entity inside `Vote` (needed a
+    DB-level `UNIQUE` constraint for concurrency safety, incompatible with
+    living inside `Vote`'s transactional boundary). Fields:
+    `id, vote_id, unit_id, option_id, cast_by_owner_id, cast_at` all
+    `Field(frozen=True)`; `superseded_by_ballot_id: BallotId | None = None`
+    is the ONLY mutable field. `Ballot.create(..., now: datetime)` sets
+    `cast_at=now`. `supersede(by: BallotId)`: checks `by == self.id` first
+    (`BallotCannotSupersedeItselfError`, checked before the next one because
+    it's a more fundamental error, independent of current state), then
+    checks `self.superseded_by_ballot_id is not None`
+    (`BallotAlreadySupersededError`). **Decision**: a unit's ballot can only
+    be corrected (superseded) by the SAME owner who originally cast it — a
+    different co-owner of the same `Unit` cannot override it (this is
+    enforced by the `CastBallot` use case, not the aggregate, since it
+    requires comparing against the existing ballot — a cross-aggregate
+    concern).
+  - `VoteResult` + `OptionTally` (frozen VOs, embedded inside `Vote.result`,
+    not their own aggregate/table — no independent lifecycle, created whole
+    at `CloseVote` time): `OptionTally` = `option_id, unit_count,
+    weighted_coefficient` (raw summed `Decimal`, NOT a pre-computed
+    percentage — same convention as `Quota` storing `amount` rather than a
+    derived `percentage_of_total`). `VoteResult` = `tallies` (ALWAYS one
+    entry per `Vote.options`, including options with zero votes —
+    `unit_count=0`, `weighted_coefficient=Decimal("0")` — a real bug was
+    caught and fixed here: the first implementation silently dropped
+    zero-vote options from `tallies`), `total_units_in_community`,
+    `units_that_voted`, `total_participation_coefficient`, `closed_at`.
+  - `calculate_vote_result` (`src/domain/vote/calculation.py`) — pure
+    function, not a `Vote`/`VoteResult` method, same pattern as
+    `allocate_largest_remainder` in `quota` (needs `Community.units` and all
+    of a `Vote`'s `Ballot`s, both cross-aggregate reads). Only considers
+    ballots with `superseded_by_ballot_id is None` (raises
+    `InconsistentBallotStateError` if more than one active ballot exists for
+    the same unit — should be impossible given the DB partial-unique
+    constraint, but the pure function doesn't assume it). Raises
+    `BallotReferencesUnknownUnitError` (not a raw `KeyError`) if an active
+    ballot's `unit_id` isn't found in the given `units`.
+  - **Decision**: a `Vote` reports raw tallies only — unit-count basis AND
+    coefficient-weighted basis, side by side — never an `approved: bool`
+    verdict. LPH majority thresholds (simple/qualified/unanimous, per
+    decision type) are a future concern, deliberately out of scope; humans
+    interpret the numbers against the meeting's actual agenda.
+  - **Decision**: participation counts a `Unit` once it has ANY active
+    ballot, including an explicit "abstención" option if the `Vote` defines
+    one — abstaining counts as participating. A `Unit` that never casts any
+    ballot does NOT count toward `units_that_voted`, only toward
+    `total_units_in_community`.
+  - **Decision**: ballot content (which option was chosen) is secret until
+    `CloseVote`. Participation (which units HAVE voted, regardless of what)
+    is public at all times — this is why `Ballot`'s existence-per-unit is
+    queryable independently of `VoteResult`.
 
 ## Business invariants already decided (do not reopen without explicit confirmation)
 - `Owner` is an independent aggregate (own identity, can belong to 0..N communities).
@@ -115,12 +191,16 @@ code wins and this file needs fixing.
   or the use case. Every entry point into the system (API, batch import,
   scheduled job) must go through the aggregate.
 - **Optimistic concurrency**: `Community`, `Owner`, `Account`,
-  `CommunityGroup`, and `Quota` all carry a `version: int` field. Repository `save()` does an upsert with
-  `WHERE <table>.version = <expected_version>`, detects a skipped update via
-  `RETURNING` (NOT `rowcount` — unreliable/`-1` with async psycopg on
-  `ON CONFLICT ... WHERE`), and raises a per-aggregate `ConcurrentModificationError`
-  (mapped to HTTP 412) if the version doesn't match. Any new mutable aggregate
-  needs this same pattern.
+  `CommunityGroup`, `Quota`, and `Vote` all carry a `version: int` field.
+  `Ballot` deliberately does NOT — it never mutates except the single
+  supersede operation, and the real concurrency guard for `Ballot` is the DB
+  partial-unique index below, not optimistic versioning. Repository `save()`
+  does an upsert with `WHERE <table>.version = <expected_version>`, detects
+  a skipped update via `RETURNING` (NOT `rowcount` — unreliable/`-1` with
+  async psycopg on `ON CONFLICT ... WHERE`), and raises a per-aggregate
+  `ConcurrentModificationError` (mapped to HTTP 412) if the version doesn't
+  match. Any new mutable aggregate needs this same pattern (unless, like
+  `Ballot`, it has its own dedicated concurrency mechanism instead).
 - **IntegrityError handling**: any repository `save()` that can hit a DB-level
   UNIQUE constraint must catch `IntegrityError`, call `await session.rollback()`
   UNCONDITIONALLY as the first statement in the `except` block (before either
@@ -150,12 +230,123 @@ code wins and this file needs fixing.
   creation is at most an annual event per community). If write volume ever
   grows enough to matter, the correct fix is a Postgres `EXCLUDE` constraint
   using the `btree_gist` extension, not tightening the use-case check alone.
+- **`Vote.close()` never itself checks the deadline.** It only guards against
+  double-close (`VoteAlreadyClosedError`). Whether `now > vote.end_date` is
+  checked exclusively by the `CloseVote` use case (strictly `>`, not `>=` —
+  cerrando exactamente en `end_date` podría rechazar un `Ballot` legítimo que
+  llega en ese mismo instante). Symmetrically, `CastBallot` rejects any
+  ballot where `now > vote.end_date` (`VoteHasEndedError`) even though
+  `CloseVote` may not have run yet — a `Vote` whose deadline has passed but
+  hasn't been closed is a normal, expected state (`CloseVote` is an explicit
+  use case, never automatic), not an error state.
+- **A `Vote` counts as "open" (blocking `Unit` coefficient/membership
+  changes — see below) purely based on `result is None`, regardless of
+  whether `end_date` has passed.** `VoteRepository.exists_open_vote_for_community`
+  implements exactly this criterion — do not conflate it with an `end_date`
+  comparison; the risk this guards against (coefficients changing between
+  when ballots were cast and when `CloseVote` actually runs) persists for as
+  long as `result` is `None`, independent of the deadline.
+- **`Unit` coefficient/membership changes must be blocked while any `Vote` of
+  that `Community` is open** (`result is None`). As of this writing, NO
+  actual application use case exists that changes a `Unit`'s
+  `participation_coefficient` or the community's set of units on an
+  already-persisted `Community` — `AssignOwnerToUnit` is the only mutator of
+  an existing `Community.units`, and it only changes `owner_ids`, never
+  `participation_coefficient` or the unit count, so it is deliberately NOT
+  blocked by this invariant and has a regression test proving it still
+  works with an open vote. `VoteRepository.exists_open_vote_for_community(community_id)`
+  is built and tested and ready to be wired in, but do NOT create a
+  `CommunityHasOpenVoteError` or inject `VoteRepository` into any use case
+  until an actual subdivision/coefficient-change use case is built — creating
+  the error ahead of any caller was previously done once by mistake for
+  `Vote.ConcurrentModificationError` and had to be reverted; don't repeat
+  that pattern.
+- **Two `IntegrityError`-backed race windows exist in `vote`, deliberately
+  accepted (parallel to the `Quota` overlap-check exception above), with one
+  now fully closed at the DB level**:
+  - `CastBallot`'s "check active ballot, then decide create/supersede/reject"
+    sequence has an inherent TOCTOU race between the read and the
+    `Ballot.save()` — marked with a `# TODO(race-condition):` comment in
+    `cast_ballot.py`. At the domain/repository level this is now CLOSED: the
+    partial unique index below makes two concurrent "no active ballot" reads
+    followed by two inserts result in exactly one success and one
+    `ConcurrentBallotSubmissionError`. What remains open, deliberately, is
+    that `CastBallot` itself does not yet catch/retry on
+    `ConcurrentBallotSubmissionError` — that's future application-layer
+    work, noted in the same comment.
+  - `CreateQuota`'s ordinary-overlap check (see above) remains an accepted,
+    unclosed race — different from `Ballot`'s, which now has a real DB
+    constraint backing it.
+
+## `Ballot` DB-level constraint — the partial unique index
+`ballots` has `Index("ix_ballots_active_per_vote_unit", vote_id, unit_id,
+unique=True, postgresql_where=(superseded_by_ballot_id IS NULL))` — the
+FIRST partial index in this project (everything else is a plain
+`UNIQUE`/index). It enforces "at most one active ballot per (vote_id,
+unit_id)" while allowing unlimited historical (superseded) ballots for the
+same pair. `PostgresBallotRepository.save()` catches the resulting
+`IntegrityError`, inspects `error.orig.diag.constraint_name` (not the
+message), and translates a hit on this specific index name to
+`ConcurrentBallotSubmissionError` (domain error, `VoteDomainError` subclass);
+any other `IntegrityError` is re-raised untranslated after the same
+unconditional rollback used elsewhere.
+
+**Real bug found and fixed during this work**: `superseded_by_ballot_id`'s
+FK to `ballots.id` had to be declared `deferrable=True, initially="DEFERRED"`
+(checked at `COMMIT`, not per-statement). `CastBallot`'s real save order is
+`save(old_ballot)` (an UPDATE setting `superseded_by_ballot_id =
+new_ballot.id`) THEN `save(new_ballot)` (an INSERT) — with an immediate FK,
+the UPDATE fails because `new_ballot`'s row doesn't exist yet at that point.
+Deferring the FK check to commit-time does NOT reopen the race the partial
+index protects against: the old row stops counting as "active" for that
+index the instant its `UPDATE` runs (its `superseded_by_ballot_id` is no
+longer NULL), which happens before `new_ballot` is even inserted. Covered by
+an integration test that failed before this fix and passes after
+(`test_supersede_makes_new_ballot_active_and_keeps_old_one_persisted`).
+
+## `Vote`/`Ballot` persistence shape
+- `votes` table: `options` and `result` are stored as **JSONB** (first JSONB
+  usage in the project), serialized/deserialized via pydantic
+  `model_dump(mode="json")` / `model_validate` — chosen over relational child
+  tables because both are effectively immutable-once-written blobs with no
+  need for independent SQL querying (`options` fixed at creation, `result`
+  written once atomically at `CloseVote`). `Decimal` fields inside
+  (`weighted_coefficient`, `total_participation_coefficient`) survive the
+  round trip with full precision because pydantic's `mode="json"` serializes
+  `Decimal` as a string, not a float — verified explicitly with an 18-digit
+  test case.
+- **Real bug found and fixed**: the `result` JSONB column needed
+  `JSONB(none_as_null=True)`. Without it, SQLAlchemy's default JSON/JSONB
+  bind processor writes a Python `None` as the JSON literal `null` rather
+  than SQL `NULL`, which silently broke `WHERE result IS NULL` (used by
+  `exists_open_vote_for_community`) — the query returned zero rows for a
+  genuinely open vote. Caught by an integration test against real Postgres,
+  not by unit tests (a fake repository wouldn't hit this bind-processor
+  behavior at all) — this is the concrete argument for why `vote`'s
+  integration test suite exists and uses testcontainers+Alembic rather than
+  trusting the fakes alone.
+- `ballots` table is fully relational (not JSONB) since it's exactly what
+  the partial unique index needs to enforce. `unit_id` and `option_id`
+  columns carry NO foreign key (same reasoning as
+  `QuotaAllocationModel.unit_id`): `Unit` rows are deleted and reinserted on
+  every `Community.save()` (`PostgresCommunityRepository._replace_units`),
+  so an FK with `ON DELETE CASCADE` would cascade-delete ballot history on
+  unrelated community edits; `option_id` has no FK because `options` lives
+  inside `VoteModel.options` (JSONB), not a relational table. Both are
+  validated by the application layer (`CastBallot`/`CloseVote`), not the DB.
 
 ## Coding conventions
 - Value Objects/Entities/Aggregates are immutable-by-default pydantic
   `BaseModel` (`frozen=True`); aggregate roots that mutate use
   `validate_assignment=True` instead of `frozen=True` (see pydantic exception
-  below).
+  below). Where an aggregate has some frozen fields and some mutable ones
+  under `validate_assignment=True` (e.g. `Vote.options` vs `Vote.result`;
+  every field of `Ballot` except `superseded_by_ballot_id`), the frozen
+  fields use `Field(frozen=True)` individually — `validate_assignment=True`
+  alone does NOT block reassignment of a field, it only re-runs validators
+  on assignment; only `Field(frozen=True)` actually raises on reassignment.
+  This was caught and fixed once already (`Vote.options`) — don't repeat the
+  mistake of assuming "no setter method" is the same as "immutable".
 - Repositories are defined as interfaces (ABC) in `domain/`, implemented in
   `infrastructure/`. All repository methods are `async def`.
 - One use case = one class with a single `execute()` method. Do not merge two
@@ -169,21 +360,38 @@ code wins and this file needs fixing.
   takes `type: QuotaType` (the enum itself), not `str` — the Pydantic API
   schema (`CreateQuotaRequest.type: QuotaType`) already validates it at the
   HTTP boundary (FastAPI returns 422 on an invalid value), so there is no
-  primitive-to-domain conversion left for the use case to do.
+  primitive-to-domain conversion left for the use case to do. `vote`'s use
+  cases (`CreateVote`, `CastBallot`, `CloseVote`) all take an injected
+  `now: datetime` parameter alongside the primitive IDs — never call
+  `datetime.now()` internally, mirroring `Vote.create`/`Ballot.create`.
+- Each application-layer use case in `vote` (`CreateVote`, `CastBallot`,
+  `CloseVote`) defines its OWN local copies of shared-sounding errors
+  (`AccountNotFoundError`, `CommunityNotFoundError`, etc.) rather than
+  importing from one another — this mirrors the pre-existing convention in
+  `create_quota.py`/`create_community_group.py` (each defines its own
+  `CommunityNotFoundError` too). Do not "clean this up" into a shared module
+  without discussing it first; it's consistent, deliberate duplication
+  across the whole project, not an oversight local to `vote`.
 - Everything — domain concepts, aggregates, events, use cases, comments,
   variable names — is in English. Exceptions: `CIF` and `NIF`/`NIE` (Spanish
   legal identifiers with no English equivalent) keep their original names.
 - Cross-aggregate existence checks (e.g. "does this Owner exist before linking
   it") belong in the application-layer use case, never inside the aggregate
   itself — an aggregate can only validate itself, not query other aggregates'
-  repositories.
+  repositories. Same rule applied throughout `vote`: `Ballot` cannot validate
+  that its `option_id` belongs to the `Vote`'s options, or that `unit_id`
+  belongs to the right `Community` — those checks live in `CastBallot`.
 - Every FastAPI route MUST set `summary`, an English `description` (behavior
   and business invariants the API consumer needs to know, not a restatement
   of the code), an explicit `response_model`, and `responses={...}` documenting
   each domain-error HTTP status the endpoint can actually return (400, 404,
   409, 412, 422) with a short English description of when it occurs. This is
   the sole source of API documentation — FastAPI's generated OpenAPI schema
-  (`/docs`, `/openapi.json`), no hand-written docs files.
+  (`/docs`, `/openapi.json`), no hand-written docs files. **Not yet done for
+  `vote`**: no FastAPI routers exist yet for `CreateVote`/`CastBallot`/
+  `CloseVote` — only the domain, application use cases, and infrastructure
+  layers have been built so far; the `interfaces/api` layer for `vote` is
+  still pending.
 
 ## Commands
 - Install dependencies: `uv sync`
@@ -198,7 +406,16 @@ code wins and this file needs fixing.
 - New migration: `uv run alembic revision --autogenerate -m "description"` —
   ALWAYS read the generated file and verify it against the actual model
   definitions before trusting it; autogenerate has been wrong before
-  (missing constraints, wrong precision).
+  (missing constraints, wrong precision). To run this locally you need a real
+  Postgres reachable at `DATABASE_URL` — use `docker compose up -d db` (see
+  "Local dev DB" above), export
+  `DATABASE_URL=postgresql+psycopg://vecinio:vecinio@localhost:5433/vecinio`, # pragma: allowlist secret
+  run `alembic upgrade head` first, then autogenerate, then `docker compose
+  down` when finished. For a `postgresql_where` partial index, ALSO verify
+  the generated DDL directly against a live Postgres (`\d <table>` in `psql`)
+  — autogenerate can silently produce a full index instead of a partial one
+  if the model declaration is wrong; don't trust the migration file's
+  Python source alone for this case.
 - Apply migrations: `uv run alembic upgrade head`
 - Pre-commit (all hooks, forced): `uv run pre-commit run --all-files`
 - **Note**: `.pre-commit-config.yaml` has `exclude: ^migrations/` — this means
@@ -228,3 +445,11 @@ discussion.
   single Postgres driver.
 - Do not use `passlib` for anything — unmaintained, already replaced by
   `pwdlib`.
+- Do not create `CommunityHasOpenVoteError` or wire `VoteRepository` into any
+  `community` use case until an actual subdivision/coefficient-change use
+  case exists (see the `Unit`-lock invariant above) — there is nowhere
+  legitimate to call it from yet.
+- Do not make `CastBallot` catch/retry on `ConcurrentBallotSubmissionError`
+  without discussing the retry strategy first — the error exists and is
+  correctly raised by the repository, but the application-layer handling of
+  it (retry once? surface a 409? something else?) hasn't been decided.

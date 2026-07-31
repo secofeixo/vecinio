@@ -1,56 +1,55 @@
 # Vecinio
 
-Backend para la gestión de comunidades de propietarios (Homeowners
-Association Management): comunidades, unidades/pisos, propietarios,
-cuentas de acceso, agrupaciones de comunidades (mancomunidades) y cuotas.
+Backend for Homeowners Association Management: communities, units/flats,
+owners, access accounts, community groups (mancomunidades) and quotas.
 
-Construido con **Tactical DDD** (sin CQRS ni Event Sourcing, decisión
-deliberada) sobre **FastAPI** async y **PostgreSQL**.
+Built with **Tactical DDD** (no CQRS, no Event Sourcing — a deliberate
+decision) on top of async **FastAPI** and **PostgreSQL**.
 
-## Stack técnico
+## Tech stack
 
-- **Backend**: Python 3.12+, FastAPI, SQLAlchemy async (driver `psycopg`,
-  único driver de Postgres del proyecto).
-- **Gestor de paquetes**: [`uv`](https://docs.astral.sh/uv/) (no `poetry`,
-  no `pip` directo).
-- **Persistencia**: PostgreSQL, migraciones con **Alembic**
-  (`migrations/`, única fuente de verdad del esquema).
-- **Auth**: JWT de acceso (vida corta) + refresh tokens opacos
-  (revocables, hasheados en BD). Hash de contraseñas con `pwdlib`
+- **Backend**: Python 3.12+, FastAPI, SQLAlchemy async (`psycopg` driver,
+  the project's single Postgres driver).
+- **Package manager**: [`uv`](https://docs.astral.sh/uv/) (not `poetry`,
+  not `pip` directly).
+- **Persistence**: PostgreSQL, migrations with **Alembic**
+  (`migrations/`, the single source of truth for the schema).
+- **Auth**: short-lived JWT access tokens + opaque refresh tokens
+  (revocable, hashed at rest). Password hashing with `pwdlib`
   (argon2id).
-- **Frontend**: Vue 3 + Pinia — todavía no iniciado.
+- **Frontend**: Vue 3 + Pinia — not started yet.
 
-## Puesta en marcha
+## Getting started
 
-### Requisitos
+### Requirements
 
 - Python 3.12+
 - [`uv`](https://docs.astral.sh/uv/getting-started/installation/)
-- Docker (para tests de integración/e2e vía testcontainers, y opcionalmente
-  para levantar Postgres en local)
-- PostgreSQL accesible (local, Docker o remoto) para ejecutar la API
+- Docker (for integration/e2e tests via testcontainers, and optionally
+  to run Postgres locally)
+- Reachable PostgreSQL (local, Docker or remote) to run the API
 
-### Instalar dependencias
+### Install dependencies
 
 ```bash
 uv sync
 ```
 
-### Variables de entorno
+### Environment variables
 
-La API requiere:
+The API requires:
 
-- `DATABASE_URL` — cadena de conexión a PostgreSQL (driver `psycopg`,
-  p. ej. `postgresql+psycopg://user:pass@localhost:5432/vecinio`)   # pragma: allowlist secret
-- `JWT_SECRET_KEY` — clave secreta para firmar los JWT
+- `DATABASE_URL` — PostgreSQL connection string (`psycopg` driver,
+  e.g. `postgresql+psycopg://user:pass@localhost:5432/vecinio`)   # pragma: allowlist secret
+- `JWT_SECRET_KEY` — secret key used to sign JWTs
 
-### Aplicar migraciones
+### Apply migrations
 
 ```bash
 uv run alembic upgrade head
 ```
 
-### Levantar la API en local
+### Run the API locally
 
 ```bash
 DATABASE_URL=postgresql+psycopg://user:pass@localhost:5432/vecinio \   # pragma: allowlist secret
@@ -58,74 +57,102 @@ JWT_SECRET_KEY=change-me \
 uv run uvicorn src.interfaces.api.main:app --reload
 ```
 
+## Using the Makefile
+
+The `Makefile` wraps the local `docker-compose.yml` stack (a Postgres `db`
+service plus a `backend` service) for day-to-day Docker-based workflows:
+
+| Target | What it does |
+|---|---|
+| `make build` | Builds the `backend` image (`docker compose build`) |
+| `make up` | Starts the stack in the background (`docker compose up -d`) |
+| `make up-fg` | Starts the stack in the foreground, streaming logs |
+| `make down` | Stops the stack (`docker compose down`) |
+| `make logs` | Follows logs for all services (`docker compose logs -f`) |
+| `make migrate` | Runs `alembic upgrade head` inside a one-off `backend` container |
+| `make destroy-database` | Stops the `db` service and removes its volume (`vecinio_postgres_data`) — **destructive**, deletes all local data |
+
+Typical local flow:
+
+```bash
+make up        # start Postgres (and the backend container)
+make migrate   # apply migrations
+make logs      # follow logs
+make down      # stop everything when done
+```
+
+`make destroy-database` is irreversible — it drops the `vecinio_postgres_data`
+volume — use it only when you intentionally want a clean local database.
+
+Note: this `docker-compose.yml` stack is separate from the testcontainers
+Postgres instances spun up automatically by the integration/e2e test suites.
+
 ## Tests
 
-El proyecto distingue tres niveles de test:
+The project distinguishes three test levels:
 
-| Nivel | Comando | Requiere Docker |
+| Level | Command | Requires Docker |
 |---|---|---|
-| Unitarios (sin I/O) | `uv run pytest tests/unit` | No |
-| Integración (Postgres real vía testcontainers + Alembic) | `uv run pytest tests/integration` | Sí |
-| E2E (`httpx.AsyncClient` contra la app FastAPI completa) | `uv run pytest tests/e2e` | Sí |
-| Suite completa | `uv run pytest tests` | Sí |
+| Unit (no I/O) | `uv run pytest tests/unit` | No |
+| Integration (real Postgres via testcontainers + Alembic) | `uv run pytest tests/integration` | Yes |
+| E2E (`httpx.AsyncClient` against the full FastAPI app) | `uv run pytest tests/e2e` | Yes |
+| Full suite | `uv run pytest tests` | Yes |
 
-Los tests de integración y e2e provisionan el esquema ejecutando
-`alembic upgrade head` / `downgrade base` contra un contenedor Postgres real
-(nunca `Base.metadata.create_all`), para que el esquema probado sea siempre
-el que generan las migraciones.
+Integration and e2e tests provision the schema by running
+`alembic upgrade head` / `downgrade base` against a real Postgres container
+(never `Base.metadata.create_all`), so the schema under test is always the
+one generated by the migrations.
 
-## Calidad de código / pre-commit
+## Code quality / pre-commit
 
 ```bash
 uv run pre-commit run --all-files
 ```
 
-Incluye, entre otros: `black`, `isort`, `flake8` (+`flake8-bugbear`),
-`mypy`, `pydocstyle` (convención Google), `complexipy` (complejidad máxima
-12) y `detect-secrets`. Los commits deben seguir
-[Conventional Commits](https://www.conventionalcommits.org/) (verificado
-con `commitizen`).
+Includes, among others: `black`, `isort`, `flake8` (+`flake8-bugbear`),
+`mypy`, `pydocstyle` (Google convention), `complexipy` (max complexity 12)
+and `detect-secrets`. Commits must follow
+[Conventional Commits](https://www.conventionalcommits.org/) (checked with
+`commitizen`).
 
-`migrations/` está excluido de todos estos hooks (`exclude: ^migrations/`
-en `.pre-commit-config.yaml`) — es una brecha conocida y aceptada, no
-pendiente de revisión inmediata.
+`migrations/` is excluded from all these hooks (`exclude: ^migrations/`
+in `.pre-commit-config.yaml`) — a known, accepted gap, not currently
+pending review.
 
 ## CI
 
-GitHub Actions (`.github/workflows/ci.yml`) ejecuta dos jobs en paralelo,
-cada uno con timeout de 15 minutos:
+GitHub Actions (`.github/workflows/ci.yml`) runs two parallel jobs, each
+with a 15-minute timeout:
 
 - `lint`: `pre-commit run --all-files`
-- `test`: `pytest tests/unit tests/integration tests/e2e` (requiere Docker)
+- `test`: `pytest tests/unit tests/integration tests/e2e` (requires Docker)
 
-## Convenciones de nombres y estilo
+## Naming and style conventions
 
-- **Idioma**: todo el código (aggregates, entidades, value objects, casos
-  de uso, variables, comentarios) está en inglés. Únicas excepciones: `CIF`
-  y `NIF`/`NIE` (identificadores legales españoles sin equivalente en
-  inglés), que conservan su nombre original.
-- **IDs de dominio**: value objects tipados (`CommunityId`, `OwnerId`,
-  `AccountId`, etc.), nunca un `str`/`UUID` a secas cruzando capas —
-  excepto en el límite `execute()` de la capa de aplicación, que recibe
-  primitivos (str, UUID, Decimal) y construye los value objects
-  internamente.
-- **Casos de uso**: una clase por caso de uso, con un único método
-  `execute()`. No se fusionan dos casos de uso en un mismo handler. Las
-  excepciones de dominio se propagan sin capturarse/envolverse en la capa
-  de aplicación.
-- **Repositorios**: interfaces (`ABC`) en `domain/`, implementación en
-  `infrastructure/`. Todos los métodos son `async def`.
-- **Inmutabilidad**: value objects/entidades/aggregates son modelos
-  pydantic `frozen=True` por defecto; los aggregate roots que mutan usan
-  `validate_assignment=True` en su lugar.
-- **Validación de invariantes**: siempre en métodos del aggregate, nunca en
-  el router de FastAPI ni en el caso de uso. Las comprobaciones de
-  existencia entre agregados (p. ej. "¿existe este Owner?") viven en el
-  caso de uso, nunca dentro del propio aggregate.
-- **Estructura por bounded context**: cada contexto (`community`, `owner`,
-  `identity`, `community_group`, `quota`, …) tiene su propia carpeta
-  reflejada en `domain/`, `application/` e `infrastructure/`.
+- **Language**: all code (aggregates, entities, value objects, use cases,
+  variables, comments) is in English. Only exceptions: `CIF` and
+  `NIF`/`NIE` (Spanish legal identifiers with no English equivalent), which
+  keep their original names.
+- **Domain IDs**: typed value objects (`CommunityId`, `OwnerId`,
+  `AccountId`, etc.), never a bare `str`/`UUID` crossing layers — except at
+  the application-layer `execute()` boundary, which takes primitives (str,
+  UUID, Decimal) and builds the value objects internally.
+- **Use cases**: one class per use case, with a single `execute()` method.
+  Two use cases are never merged into one handler. Domain exceptions
+  propagate without being caught/wrapped in the application layer.
+- **Repositories**: interfaces (`ABC`) in `domain/`, implementation in
+  `infrastructure/`. All methods are `async def`.
+- **Immutability**: value objects/entities/aggregates are `frozen=True`
+  pydantic models by default; aggregate roots that mutate use
+  `validate_assignment=True` instead.
+- **Invariant validation**: always in aggregate methods, never in the
+  FastAPI router or the use case. Cross-aggregate existence checks (e.g.
+  "does this Owner exist?") live in the use case, never inside the
+  aggregate itself.
+- **Structure by bounded context**: each context (`community`, `owner`,
+  `identity`, `community_group`, `quota`, …) has its own folder mirrored
+  across `domain/`, `application/` and `infrastructure/`.
 
-Para las decisiones de arquitectura y los invariantes de negocio ya
-cerrados (concurrencia optimista, manejo de `IntegrityError`, reglas de
-cada bounded context, etc.), ver [`CLAUDE.md`](CLAUDE.md).
+For architecture decisions and closed business invariants (optimistic
+concurrency, `IntegrityError` handling, rules for each bounded context,
+etc.), see [`CLAUDE.md`](CLAUDE.md).

@@ -51,9 +51,9 @@ La estructura base ya está implementada: `CommunityGroup` (bounded context
 ### Roles de gobierno (presidente, tesorero, administrador de fincas externo)
 - Hoy el dominio no tiene ningún concepto de rol dentro de una comunidad.
 - Decisión de posponer: correcta y deliberada — diseñar la matriz de permisos
-  contra solo 3-4 casos de uso actuales sería adivinar, no diseñar. Esperar a
-  tener más bounded contexts de negocio reales (cuotas, incidencias) antes de
-  diseñar roles finos.
+  contra solo unos pocos casos de uso actuales sería adivinar, no diseñar.
+  Esperar a tener más bounded contexts de negocio reales (cuotas, votaciones,
+  incidencias) antes de diseñar roles finos.
 - Cuando llegue el momento: probablemente un bounded context nuevo
   (`governance`), con roles como lista de asignaciones dentro de `Community`
   (parecido a `Unit.owner_ids`) porque el invariante "solo un presidente activo
@@ -61,6 +61,14 @@ La estructura base ya está implementada: `CommunityGroup` (bounded context
   hipótesis de diseño, no decidida en firme.
 - El administrador de fincas externo sustituiría (parcial o totalmente) al
   tesorero — relación exacta sin definir todavía.
+- **Nuevo desde `vote`**: hoy CUALQUIER `Account` vinculada a un `Owner` que
+  sea propietario de alguna `Unit` de la `Community` puede convocar una
+  votación (`CreateVote`) o cerrarla (`CloseVote`) — restricción mínima
+  temporal, deliberadamente laxa hasta que exista `governance`. Cuando se
+  diseñe `governance`, hay que decidir si conviene restringir a un rol
+  concreto (¿presidente? ¿cualquier propietario sigue pudiendo?), y también
+  cómo encaja un futuro administrador de fincas externo, que probablemente
+  deba poder crear/cerrar votaciones sin ser propietario de ninguna unidad.
 
 ### Cuotas (`quota`) — lo ya implementado y lo diferido conscientemente
 El bounded context `quota` (creación de una `Quota`: reparto de un importe
@@ -120,12 +128,77 @@ deliberadamente, para no perderlo de vista:
   poder elegir entre cálculo manual o automático — eso queda para más
   adelante, sin diseñar todavía.
 
+### Votaciones (`vote`) — lo ya implementado y lo diferido conscientemente
+El bounded context `vote` (consultas/votaciones tipo aprobar un presupuesto,
+una derrama, un estudio de placas solares, etc., con voto por `Unit` —no por
+persona—, ponderación por coeficiente además de por nº de unidades, y cierre
+explícito con snapshot de resultados) **ya está implementado de punta a
+punta**: dominio (`Vote`, `Ballot`, `VoteResult`), casos de uso (`CreateVote`,
+`CastBallot`, `CloseVote`), la invariante de bloqueo de cambios de `Unit`
+durante una votación abierta (mecanismo de consulta construido y probado,
+aunque sin ningún caso de uso todavía que lo dispare — ver más abajo), e
+infraestructura completa (Postgres, migraciones, constraint `UNIQUE` parcial
+para evitar doble voto activo por unidad). Ver `CLAUDE.md` para el detalle
+técnico. Lo que sigue es lo que se discutió y se decidió aplazar
+deliberadamente:
+
+- **Votaciones secretas vs públicas configurables**: de momento TODAS las
+  votaciones son secretas en cuanto al contenido del voto (quién votó qué),
+  aunque el padrón de participación (qué unidades ya han votado) siempre es
+  público. No existe todavía un campo `is_secret`/`visibility` en `Vote` ni
+  se ha diseñado qué pasaría con una votación pública — quedó explícitamente
+  aplazado al principio del diseño ("no sé si ahora deberíamos abordar el
+  que una votación pudiera ser secreta o no"). Si en el futuro se quiere
+  soportar votaciones públicas, hace falta decidir: ¿es un campo en `Vote`
+  fijado al crearla (inmutable, como `options`), y qué cambia exactamente
+  a nivel de consulta (¿se puede ver el desglose de votos por unidad antes
+  del cierre, o solo tras `CloseVote`?).
+- **Veredicto de aprobación / mayorías LPH**: `VoteResult` reporta solo datos
+  puros (recuentos y coeficientes ponderados por opción, participación) —
+  nunca un `approved: bool`. La LPH exige mayorías dobles (nº de propietarios
+  Y cuotas de participación) con umbrales distintos según el tipo de acuerdo
+  (simple, cualificada 3/5, unanimidad). Diseñar esto requeriría un concepto
+  de "tipo de decisión" con su umbral asociado — bounded context de reglas
+  LPH todavía sin abrir. Por ahora, los humanos interpretan los tallies según
+  el orden del día real de la junta.
+- **Quién puede convocar/cerrar una votación**: ver "Roles de gobierno" más
+  arriba — hoy sin restricción de rol, solo "ser propietario de alguna unit
+  de la comunidad".
+- **Invariante de bloqueo de `Unit` durante votación abierta — construida
+  pero sin ningún caso de uso que la dispare todavía**: `VoteRepository.
+  exists_open_vote_for_community(community_id)` existe y está probado (una
+  `Vote` cuenta como "abierta" mientras `result is None`, sin importar si
+  `end_date` ya pasó). Pero investigando el código real se confirmó que
+  **ningún caso de uso actual cambia `participation_coefficient` de una
+  `Unit` existente ni el conjunto de units de una `Community` ya
+  persistida** — `AssignOwnerToUnit` es el único mutador de units existentes
+  y solo toca `owner_ids`, no coeficientes, así que deliberadamente NO se le
+  aplicó este candado. Cuando se construya un futuro caso de uso de
+  subdivisión de unidades o recálculo de coeficientes, ESE es el punto donde
+  hay que inyectar `VoteRepository` y crear el error de aplicación
+  correspondiente (todavía sin nombre definitivo ni creado en código, para
+  no dejar código muerto especulativo).
+- **Reintento automático ante colisión de concurrencia en `CastBallot`**: la
+  constraint `UNIQUE` parcial en BD (`ix_ballots_active_per_vote_unit`) ya
+  hace cumplir "máximo un ballot activo por unidad y votación", y el
+  repositorio ya traduce la violación a un error de dominio
+  (`ConcurrentBallotSubmissionError`). Pero `CastBallot` todavía NO captura
+  ni reintenta ante ese error — queda como un `TODO` explícito en el código.
+  Cuando se aborde: decidir si se reintenta automáticamente una vez (releer
+  el ballot activo y devolver ese error de negocio al usuario en vez de un
+  500), o si simplemente se traduce a un 409 para que el cliente reintente.
+- **Interfaz HTTP (FastAPI)**: no existe ningún router todavía para
+  `CreateVote`/`CastBallot`/`CloseVote` — solo dominio, aplicación e
+  infraestructura de persistencia están construidos. Falta la capa
+  `interfaces/api` completa para este bounded context.
+
 ## Próximos pasos posibles (sin decidir orden)
 - Endpoint `GET /owners/me/units` (o similar) para que un `Owner` autenticado
   vea sus viviendas — pendiente de revisar si falta.
 - Invariante de presidencia en `CommunityGroup` (mancomunidades) — bloqueada
   por `governance`.
-- `governance` (roles).
+- `governance` (roles) — ahora con más superficie real esperándole: la
+  presidencia de mancomunidad, y quién puede convocar/cerrar votaciones.
 - Coeficiente de participación por `Community` dentro de `CommunityGroup`
   (para cuotas de mancomunidad) — bloqueado hasta decidir si reutiliza
   `Unit.participation_coefficient` o es independiente.
@@ -133,5 +206,14 @@ deliberadamente, para no perderlo de vista:
 - `billing`/`collections` (facturación y cobro de cuotas) — nuevo(s) bounded
   context(s), fuera del alcance de `quota` tal como está hoy.
 - `Refund` (devoluciones a propietarios) como concepto propio.
-- Bounded contexts de negocio nuevos: incidencias, votaciones.
+- Caso de uso de subdivisión/alta de `Unit` con recálculo de coeficientes —
+  este es también el punto donde se aplica por fin el candado de "no tocar
+  units con una votación abierta" ya construido en `vote`.
+- Interfaz HTTP (routers FastAPI) para `vote` — `CreateVote`, `CastBallot`,
+  `CloseVote` no tienen endpoint todavía.
+- Reintento/manejo de `ConcurrentBallotSubmissionError` en `CastBallot`.
+- Diseño de mayorías LPH por tipo de decisión, si se quiere un veredicto
+  automático de aprobación en `vote` más adelante.
+- Votaciones públicas (no secretas) configurables, si se retoma esa idea.
+- Bounded contexts de negocio nuevos: incidencias.
 - Frontend Vue — no iniciado.
