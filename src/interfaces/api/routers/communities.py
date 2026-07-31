@@ -26,7 +26,7 @@ from src.interfaces.api.schemas.community_schemas import (
     UnitResponse,
 )
 
-router = APIRouter(prefix="/communities", tags=["communities"])
+router = APIRouter(prefix="/communities", tags=["community"])
 
 
 def _to_response(community: Community) -> CommunityResponse:
@@ -53,7 +53,25 @@ def _to_response(community: Community) -> CommunityResponse:
     )
 
 
-@router.post("", response_model=CommunityResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    response_model=CommunityResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Register a new community",
+    description=(
+        "Creates a Community with its address, CIF, and an optional initial set "
+        "of Units. If units are provided, their `identifier` must be unique "
+        "within the community and their participation coefficients must sum to "
+        "100% — this invariant is enforced transactionally on the aggregate."
+    ),
+    responses={
+        400: {
+            "description": ("Two or more submitted units share the same `identifier`.")
+        },
+        409: {"description": "A community with this CIF already exists."},
+        422: {"description": "Request body failed validation."},
+    },
+)
 async def create_community(
     request: CreateCommunityRequest,
     session: AsyncSession = Depends(get_session),  # noqa: B008
@@ -91,7 +109,19 @@ async def create_community(
     return _to_response(community)
 
 
-@router.get("/{community_id}", response_model=CommunityResponse)
+@router.get(
+    "/{community_id}",
+    response_model=CommunityResponse,
+    summary="Get a community by id",
+    description=(
+        "Returns the community's address, CIF, and current units, including "
+        "each unit's participation coefficient and assigned owners."
+    ),
+    responses={
+        404: {"description": "No community exists with the given id."},
+        422: {"description": "`community_id` is not a valid UUID."},
+    },
+)
 async def get_community(
     community_id: UUID,
     session: AsyncSession = Depends(get_session),  # noqa: B008
@@ -106,7 +136,27 @@ async def get_community(
     return _to_response(community)
 
 
-@router.post("/{community_id}/units/{unit_id}/owners", response_model=CommunityResponse)
+@router.post(
+    "/{community_id}/units/{unit_id}/owners",
+    response_model=CommunityResponse,
+    summary="Assign an owner to a unit",
+    description=(
+        "Links an existing Owner to a Unit within the community. Co-ownership "
+        "is supported — a unit can have multiple owners, each jointly and "
+        "severally liable for 100% of that unit's dues (liability is not split "
+        "proportionally between co-owners)."
+    ),
+    responses={
+        404: {
+            "description": (
+                "The community does not exist, the unit does not exist within "
+                "it, or the owner does not exist."
+            )
+        },
+        409: {"description": "The owner is already assigned to this unit."},
+        422: {"description": "`community_id` or `unit_id` is not a valid UUID."},
+    },
+)
 async def assign_owner_to_unit(
     community_id: UUID,
     unit_id: UUID,

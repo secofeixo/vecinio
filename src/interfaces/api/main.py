@@ -11,7 +11,17 @@ from src.interfaces.api.routers.community_groups import (
 from src.interfaces.api.routers.owners import router as owners_router
 from src.interfaces.api.routers.quotas import router as quotas_router
 
-app = FastAPI(title="Vecinio")
+app = FastAPI(
+    title="Vecinio",
+    description=(
+        "API for managing homeowners associations (comunidades de propietarios): "
+        "communities and their units, owners, login accounts, community groups "
+        "(mancomunidades de propietarios), and quota splits."
+    ),
+    version="0.1.0",
+    docs_url="/docs",
+    openapi_url="/openapi.json",
+)
 
 register_exception_handlers(app)
 

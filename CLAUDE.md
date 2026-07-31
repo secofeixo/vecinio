@@ -177,6 +177,13 @@ code wins and this file needs fixing.
   it") belong in the application-layer use case, never inside the aggregate
   itself — an aggregate can only validate itself, not query other aggregates'
   repositories.
+- Every FastAPI route MUST set `summary`, an English `description` (behavior
+  and business invariants the API consumer needs to know, not a restatement
+  of the code), an explicit `response_model`, and `responses={...}` documenting
+  each domain-error HTTP status the endpoint can actually return (400, 404,
+  409, 412, 422) with a short English description of when it occurs. This is
+  the sole source of API documentation — FastAPI's generated OpenAPI schema
+  (`/docs`, `/openapi.json`), no hand-written docs files.
 
 ## Commands
 - Install dependencies: `uv sync`

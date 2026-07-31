@@ -24,7 +24,7 @@ from src.interfaces.api.schemas.community_group_schemas import (
     CreateCommunityGroupRequest,
 )
 
-router = APIRouter(prefix="/community-groups", tags=["community-groups"])
+router = APIRouter(prefix="/community-groups", tags=["community_group"])
 
 
 def _to_response(group: CommunityGroup) -> CommunityGroupResponse:
@@ -39,7 +39,30 @@ def _to_response(group: CommunityGroup) -> CommunityGroupResponse:
 
 
 @router.post(
-    "", response_model=CommunityGroupResponse, status_code=status.HTTP_201_CREATED
+    "",
+    response_model=CommunityGroupResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create a community group (mancomunidad)",
+    description=(
+        "Creates a CommunityGroup — the Spanish legal figure 'mancomunidad de "
+        "propietarios' — referencing existing Community aggregates by id "
+        "(it does not contain them; each Community keeps its own 100%-"
+        "coefficient invariant independently). Requires at least 2 member "
+        "communities. `slug` is derived automatically from `name` and is never "
+        "a settable input. A Community may belong to more than one group at "
+        "the same time — there is no membership-exclusivity invariant."
+    ),
+    responses={
+        404: {"description": "One of the given community ids does not exist."},
+        400: {
+            "description": (
+                "Fewer than 2 community ids were given, `name` is empty or "
+                "normalizes to an empty slug, or the derived slug collides with "
+                "an existing community group."
+            )
+        },
+        422: {"description": "Request body failed validation."},
+    },
 )
 async def create_community_group(
     request: CreateCommunityGroupRequest,
@@ -65,7 +88,27 @@ async def create_community_group(
 
 
 @router.post(
-    "/{group_id}/communities/{community_id}", response_model=CommunityGroupResponse
+    "/{group_id}/communities/{community_id}",
+    response_model=CommunityGroupResponse,
+    summary="Add a community to a group",
+    description=(
+        "Adds an existing Community as a member of the group. Membership "
+        "rules (no duplicates, minimum of 2 members) are enforced on every "
+        "mutation, not just at creation."
+    ),
+    responses={
+        404: {
+            "description": "The group does not exist, or the community does not exist."
+        },
+        409: {"description": "The community is already a member of this group."},
+        412: {
+            "description": (
+                "The group was concurrently modified since it was last read "
+                "(optimistic concurrency version conflict)."
+            )
+        },
+        422: {"description": "`group_id` or `community_id` is not a valid UUID."},
+    },
 )
 async def add_community_to_group(
     group_id: UUID,
@@ -83,7 +126,35 @@ async def add_community_to_group(
 
 
 @router.delete(
-    "/{group_id}/communities/{community_id}", response_model=CommunityGroupResponse
+    "/{group_id}/communities/{community_id}",
+    response_model=CommunityGroupResponse,
+    summary="Remove a community from a group",
+    description=(
+        "Removes a Community from a group's membership. A group must keep at "
+        "least 2 members at all times — removing one when only 2 remain is "
+        "rejected."
+    ),
+    responses={
+        404: {
+            "description": (
+                "The group does not exist, or the community is not currently a "
+                "member of it."
+            )
+        },
+        400: {
+            "description": (
+                "Removing this member would leave the group with fewer than 2 "
+                "members."
+            )
+        },
+        412: {
+            "description": (
+                "The group was concurrently modified since it was last read "
+                "(optimistic concurrency version conflict)."
+            )
+        },
+        422: {"description": "`group_id` or `community_id` is not a valid UUID."},
+    },
 )
 async def remove_community_from_group(
     group_id: UUID,

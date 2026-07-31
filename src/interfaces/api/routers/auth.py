@@ -23,13 +23,28 @@ from src.interfaces.api.schemas.auth_schemas import (
     TokenResponse,
 )
 
-router = APIRouter(prefix="/auth", tags=["auth"])
+router = APIRouter(prefix="/auth", tags=["identity"])
 
 
 @router.post(
     "/register",
     response_model=RegisterAccountResponse,
     status_code=status.HTTP_201_CREATED,
+    summary="Register a new account",
+    description=(
+        "Creates a login credential (email + password) in the identity bounded "
+        "context. Optionally links to an existing Owner via `owner_id` — an "
+        "Account is a separate identity from an Owner, linked only by id, never "
+        "merged; each person gets their own Account, even co-owners of the same "
+        "unit."
+    ),
+    responses={
+        404: {
+            "description": "`owner_id` was provided but no Owner exists with that id."
+        },
+        409: {"description": "An account with this email already exists."},
+        422: {"description": "Request body failed validation."},
+    },
 )
 async def register(
     request: RegisterAccountRequest,
@@ -48,7 +63,27 @@ async def register(
     return RegisterAccountResponse(id=account_id.value)
 
 
-@router.post("/login", response_model=TokenResponse)
+@router.post(
+    "/login",
+    response_model=TokenResponse,
+    summary="Authenticate and obtain access/refresh tokens",
+    description=(
+        "Verifies email and password and issues a short-lived JWT access token "
+        "plus an opaque, hashed, revocable refresh token. Returns the identical "
+        "error for an unknown email and for a wrong password — the API never "
+        "lets a caller distinguish the two, to avoid turning login into an "
+        "account-enumeration oracle."
+    ),
+    responses={
+        401: {
+            "description": (
+                "Invalid email or password — the same message is returned "
+                "whether the email is unregistered or the password is wrong."
+            )
+        },
+        422: {"description": "Request body failed validation."},
+    },
+)
 async def login(
     request: LoginRequest,
     session: AsyncSession = Depends(get_session),  # noqa: B008
@@ -64,7 +99,20 @@ async def login(
     )
 
 
-@router.post("/refresh", response_model=AccessTokenResponse)
+@router.post(
+    "/refresh",
+    response_model=AccessTokenResponse,
+    summary="Exchange a refresh token for a new access token",
+    description=(
+        "Issues a new short-lived JWT access token if the supplied refresh "
+        "token is valid, not expired, and not revoked. The refresh token itself "
+        "is not rotated on use in this version."
+    ),
+    responses={
+        401: {"description": "Refresh token is invalid, expired, or revoked."},
+        422: {"description": "Request body failed validation."},
+    },
+)
 async def refresh(
     request: RefreshRequest,
     session: AsyncSession = Depends(get_session),  # noqa: B008
@@ -77,7 +125,20 @@ async def refresh(
     return AccessTokenResponse(access_token=access_token)
 
 
-@router.post("/logout", response_model=None, status_code=status.HTTP_204_NO_CONTENT)
+@router.post(
+    "/logout",
+    response_model=None,
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Revoke a refresh token",
+    description=(
+        "Revokes the given refresh token so it can no longer be exchanged for "
+        "new access tokens."
+    ),
+    responses={
+        401: {"description": "Refresh token is invalid, expired, or revoked."},
+        422: {"description": "Request body failed validation."},
+    },
+)
 async def logout(
     request: LogoutRequest,
     session: AsyncSession = Depends(get_session),  # noqa: B008

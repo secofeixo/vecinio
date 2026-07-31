@@ -9,10 +9,25 @@ from src.infrastructure.persistence.owner_repository import PostgresOwnerReposit
 from src.interfaces.api.dependencies import get_current_account, get_session
 from src.interfaces.api.schemas.owner_schemas import CreateOwnerRequest, OwnerResponse
 
-router = APIRouter(prefix="/owners", tags=["owners"])
+router = APIRouter(prefix="/owners", tags=["owner"])
 
 
-@router.post("", response_model=OwnerResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    response_model=OwnerResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Register a new owner",
+    description=(
+        "Creates an Owner — an independent legal/business identity (NIF/NIE, "
+        "full name, contact info) that is not itself a login credential and "
+        "can belong to zero or more communities. NIF/NIE are validated against "
+        "the real Spanish checksum algorithms."
+    ),
+    responses={
+        409: {"description": "An owner with this NIF/NIE already exists."},
+        422: {"description": "Request body failed validation."},
+    },
+)
 async def register_owner(
     request: CreateOwnerRequest,
     session: AsyncSession = Depends(get_session),  # noqa: B008

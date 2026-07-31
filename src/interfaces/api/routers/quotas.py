@@ -22,7 +22,7 @@ from src.interfaces.api.schemas.quota_schemas import (
     QuotaResponse,
 )
 
-router = APIRouter(prefix="/communities/{community_id}/quotas", tags=["quotas"])
+router = APIRouter(prefix="/communities/{community_id}/quotas", tags=["quota"])
 
 
 def _to_response(quota: Quota) -> QuotaResponse:
@@ -54,7 +54,35 @@ def _to_response(quota: Quota) -> QuotaResponse:
     )
 
 
-@router.post("", response_model=QuotaResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    response_model=QuotaResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create a quota for a community",
+    description=(
+        "Creates an immutable snapshot split of an amount across every Unit "
+        "currently in the community, using the largest-remainder method so "
+        "per-unit allocations always sum exactly to the total. `total` is "
+        "computed from `lines`, never supplied directly. An ordinary quota's "
+        "period must not overlap — inclusive on both bounds — another "
+        "ordinary quota of the same community; extraordinary quotas are never "
+        "checked for overlap against anything. This endpoint only covers "
+        "creation: billing, payment tracking, periodicity, and quota "
+        "recalculation/superseding are not implemented yet."
+    ),
+    responses={
+        404: {"description": "No community exists with the given id."},
+        400: {
+            "description": (
+                "The quota is invalid: an overlapping ordinary quota already "
+                "exists for this community, `lines` is empty, the computed "
+                "total is not strictly positive, `period_start` is after "
+                "`period_end`, or the community has no units to allocate to."
+            )
+        },
+        422: {"description": "Request body failed validation."},
+    },
+)
 async def create_quota(
     community_id: UUID,
     request: CreateQuotaRequest,
@@ -82,7 +110,22 @@ async def create_quota(
     return _to_response(quota)
 
 
-@router.get("/{quota_id}", response_model=QuotaResponse)
+@router.get(
+    "/{quota_id}",
+    response_model=QuotaResponse,
+    summary="Get a quota by id",
+    description=(
+        "Returns the quota snapshot: lines, computed total, and the frozen "
+        "per-unit allocations captured at creation time (never recalculated "
+        "against current Unit state)."
+    ),
+    responses={
+        404: {
+            "description": "No quota exists with the given id within this community."
+        },
+        422: {"description": "`community_id` or `quota_id` is not a valid UUID."},
+    },
+)
 async def get_quota(
     community_id: UUID,
     quota_id: UUID,
