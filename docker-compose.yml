@@ -1,0 +1,31 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: vecinio
+      POSTGRES_PASSWORD: vecinio  # pragma: allowlist secret
+      POSTGRES_DB: vecinio
+    ports:
+      - "5433:5432"
+    volumes:
+      - vecinio_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vecinio -d vecinio"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg://vecinio:vecinio@db:5432/vecinio # pragma: allowlist secret
+      JWT_SECRET_KEY: dev-secret-key-not-for-production # pragma: allowlist secret
+    ports:
+      - "8000:8000"
+
+volumes:
+  vecinio_postgres_data:
+    name: vecinio_postgres_data
