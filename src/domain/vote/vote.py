@@ -9,6 +9,7 @@ from src.domain.identity.value_objects import AccountId
 
 from .value_objects import VoteId
 from .vote_option import VoteOption
+from .vote_result import VoteResult
 
 _MINIMUM_OPTIONS = 2
 
@@ -33,6 +34,10 @@ class VoteEndDateNotInFutureError(VoteDomainError):
     pass
 
 
+class VoteAlreadyClosedError(VoteDomainError):
+    pass
+
+
 class Vote(BaseModel):
     model_config = ConfigDict(validate_assignment=True)
 
@@ -43,6 +48,7 @@ class Vote(BaseModel):
     options: tuple[VoteOption, ...] = Field(frozen=True)
     end_date: datetime
     created_by_account_id: AccountId
+    result: VoteResult | None = None
     version: int = 0
 
     @model_validator(mode="after")
@@ -98,3 +104,8 @@ class Vote(BaseModel):
             raise VoteEndDateNotInFutureError(
                 f"end_date {end_date} must be strictly after now ({now})"
             )
+
+    def close(self, result: VoteResult) -> None:
+        if self.result is not None:
+            raise VoteAlreadyClosedError(f"Vote {self.id} has already been closed")
+        self.result = result

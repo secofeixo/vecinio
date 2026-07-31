@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 
 import pytest
 from pydantic import ValidationError
@@ -11,9 +12,11 @@ from src.domain.vote.vote import (
     EmptyVoteTitleError,
     InsufficientVoteOptionsError,
     Vote,
+    VoteAlreadyClosedError,
     VoteEndDateNotInFutureError,
 )
 from src.domain.vote.vote_option import VoteOption
+from src.domain.vote.vote_result import VoteResult
 
 _NOW = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
@@ -92,3 +95,39 @@ def test_rejects_reassigning_options_after_creation() -> None:
 
     with pytest.raises(ValidationError):
         vote.options = make_options("Maybe", "Definitely not")
+
+
+def test_vote_result_is_none_by_default() -> None:
+    vote = make_vote()
+
+    assert vote.result is None
+
+
+def test_close_sets_result_on_unclosed_vote() -> None:
+    vote = make_vote()
+    result = VoteResult(
+        tallies=(),
+        total_units_in_community=0,
+        units_that_voted=0,
+        total_participation_coefficient=Decimal("0"),
+        closed_at=_NOW,
+    )
+
+    vote.close(result)
+
+    assert vote.result == result
+
+
+def test_close_twice_raises_already_closed_error() -> None:
+    vote = make_vote()
+    result = VoteResult(
+        tallies=(),
+        total_units_in_community=0,
+        units_that_voted=0,
+        total_participation_coefficient=Decimal("0"),
+        closed_at=_NOW,
+    )
+    vote.close(result)
+
+    with pytest.raises(VoteAlreadyClosedError):
+        vote.close(result)
