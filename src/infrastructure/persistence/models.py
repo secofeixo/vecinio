@@ -13,6 +13,7 @@ from sqlalchemy import (
     Numeric,
     String,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -210,6 +211,65 @@ class VoteModel(Base):
     # exists_open_vote_for_community.
     result: Mapped[dict | None] = mapped_column(JSONB(none_as_null=True), nullable=True)
     version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+
+
+class BallotModel(Base):
+    __tablename__ = "ballots"
+    __table_args__ = (
+        # Enforces "at most one active ballot per (vote_id, unit_id)" at the DB
+        # level — partial so a unit can accumulate any number of superseded
+        # (historical) ballots without ever colliding, only the single row
+        # with superseded_by_ballot_id IS NULL per (vote_id, unit_id) is
+        # constrained.
+        Index(
+            "ix_ballots_active_per_vote_unit",
+            "vote_id",
+            "unit_id",
+            unique=True,
+            postgresql_where=text("superseded_by_ballot_id IS NULL"),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    vote_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("votes.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    # No FK to units.id: PostgresCommunityRepository._replace_units deletes and
+    # reinserts every Unit row of a Community on every save, so a
+    # ON DELETE CASCADE FK here would cascade-delete ballot history on
+    # unrelated community edits. Same reasoning as QuotaAllocationModel.unit_id
+    # above. Membership of unit_id in the vote's Community is validated by
+    # CastBallot/CloseVote in the application layer.
+    unit_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    # No FK to votes' embedded options: options live in VoteModel.options
+    # (JSONB), not a relational table.
+    option_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    cast_by_owner_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False
+    )
+    cast_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # No special ondelete: a superseding ballot being deleted must not cascade
+    # into deleting the ballot it superseded — the superseded row is history
+    # and outlives the pointer to it. Deleting a referenced row directly
+    # would violate this FK, which is the desired behavior (ballots are never
+    # deleted in normal operation).
+    # deferrable/initially="DEFERRED": CastBallot's real save order is
+    # save(old_ballot) [UPDATE, sets this column to new_ballot.id] then
+    # save(new_ballot) [INSERT] — at the moment the UPDATE runs, new_ballot's
+    # row doesn't exist yet. An immediate FK check would reject that UPDATE.
+    # Deferring the check to COMMIT lets both statements land in the same
+    # transaction before the reference is validated. This also doesn't
+    # reopen the partial-unique-index race: old_ballot stops being "active"
+    # (superseded_by_ballot_id no longer NULL) the instant its UPDATE runs,
+    # before new_ballot's INSERT is even issued.
+    superseded_by_ballot_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ballots.id", deferrable=True, initially="DEFERRED"),
+        nullable=True,
+    )
 
 
 class RefreshTokenModel(Base):

@@ -19,6 +19,10 @@ class BallotCannotSupersedeItselfError(VoteDomainError):
     pass
 
 
+class ConcurrentBallotSubmissionError(VoteDomainError):
+    pass
+
+
 class Ballot(BaseModel):
     model_config = ConfigDict(validate_assignment=True)
 

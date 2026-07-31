@@ -116,6 +116,12 @@ class CastBallot:
         # overlap checks; will be closed by a DB-level partial UNIQUE
         # constraint on (vote_id, unit_id) WHERE superseded_by_ballot_id IS
         # NULL (infrastructure, pending).
+        # The partial UNIQUE index now exists (ix_ballots_active_per_vote_unit)
+        # and PostgresBallotRepository.save() translates its violation into
+        # ConcurrentBallotSubmissionError — this use case could catch that and
+        # retry (re-read the now-active ballot and supersede/reject) instead of
+        # letting the race silently create two active ballots. Not done here;
+        # left for the application-layer follow-up.
         existing_ballot = await self._ballot_repository.get_active_ballot(
             vote_id_vo, unit_id_vo
         )

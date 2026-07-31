@@ -1,19 +1,25 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.domain.community.value_objects import CommunityId
+from src.domain.community.value_objects import CommunityId, UnitId
 from src.domain.identity.value_objects import AccountId
-from src.domain.vote.repository import VoteRepository
-from src.domain.vote.value_objects import VoteId
+from src.domain.owner.value_objects import OwnerId
+from src.domain.vote.ballot import Ballot, ConcurrentBallotSubmissionError
+from src.domain.vote.repository import BallotRepository, VoteRepository
+from src.domain.vote.value_objects import BallotId, VoteId, VoteOptionId
 from src.domain.vote.vote import ConcurrentModificationError, Vote
 from src.domain.vote.vote_option import VoteOption
 from src.domain.vote.vote_result import VoteResult
 
-from .models import VoteModel
+from .models import BallotModel, VoteModel
+
+_ACTIVE_BALLOT_PER_VOTE_UNIT_CONSTRAINT = "ix_ballots_active_per_vote_unit"
 
 
 class PostgresVoteRepository(VoteRepository):
@@ -110,4 +116,89 @@ class PostgresVoteRepository(VoteRepository):
                 else None
             ),
             version=model.version,
+        )
+
+
+class PostgresBallotRepository(BallotRepository):
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def save(self, ballot: Ballot) -> None:
+        stmt = pg_insert(BallotModel).values(
+            id=ballot.id.value,
+            vote_id=ballot.vote_id.value,
+            unit_id=ballot.unit_id.value,
+            option_id=ballot.option_id.value,
+            cast_by_owner_id=ballot.cast_by_owner_id.value,
+            cast_at=ballot.cast_at,
+            superseded_by_ballot_id=(
+                ballot.superseded_by_ballot_id.value
+                if ballot.superseded_by_ballot_id is not None
+                else None
+            ),
+        )
+        # No version field on Ballot: a new ballot is a plain insert, and the
+        # only mutation an existing ballot ever undergoes is being superseded,
+        # so an upsert on the primary key that only updates
+        # superseded_by_ballot_id is sufficient — no optimistic-concurrency
+        # WHERE clause is needed here.
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[BallotModel.id],
+            set_={"superseded_by_ballot_id": stmt.excluded.superseded_by_ballot_id},
+        )
+        try:
+            await self._session.execute(stmt)
+        except IntegrityError as error:
+            # Any IntegrityError leaves the underlying connection in an
+            # aborted transaction, unusable until rolled back.
+            await self._session.rollback()
+            if self._violates_active_ballot_uniqueness(error):
+                raise ConcurrentBallotSubmissionError(
+                    f"Unit {ballot.unit_id.value} already has an active ballot "
+                    f"for vote {ballot.vote_id.value}"
+                ) from error
+            raise
+
+    async def get_active_ballot(
+        self, vote_id: VoteId, unit_id: UnitId
+    ) -> Ballot | None:
+        stmt = select(BallotModel).where(
+            BallotModel.vote_id == vote_id.value,
+            BallotModel.unit_id == unit_id.value,
+            BallotModel.superseded_by_ballot_id.is_(None),
+        )
+        result = await self._session.execute(stmt)
+        model = result.scalar_one_or_none()
+        return self._to_domain(model) if model is not None else None
+
+    async def get_all_active_for_vote(self, vote_id: VoteId) -> Sequence[Ballot]:
+        stmt = select(BallotModel).where(
+            BallotModel.vote_id == vote_id.value,
+            BallotModel.superseded_by_ballot_id.is_(None),
+        )
+        result = await self._session.execute(stmt)
+        return tuple(self._to_domain(model) for model in result.scalars())
+
+    @staticmethod
+    def _violates_active_ballot_uniqueness(error: IntegrityError) -> bool:
+        diag = getattr(error.orig, "diag", None)
+        return (
+            getattr(diag, "constraint_name", None)
+            == _ACTIVE_BALLOT_PER_VOTE_UNIT_CONSTRAINT
+        )
+
+    @staticmethod
+    def _to_domain(model: BallotModel) -> Ballot:
+        return Ballot(
+            id=BallotId(value=model.id),
+            vote_id=VoteId(value=model.vote_id),
+            unit_id=UnitId(value=model.unit_id),
+            option_id=VoteOptionId(value=model.option_id),
+            cast_by_owner_id=OwnerId(value=model.cast_by_owner_id),
+            cast_at=model.cast_at,
+            superseded_by_ballot_id=(
+                BallotId(value=model.superseded_by_ballot_id)
+                if model.superseded_by_ballot_id is not None
+                else None
+            ),
         )
