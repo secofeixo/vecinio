@@ -38,6 +38,10 @@ class VoteAlreadyClosedError(VoteDomainError):
     pass
 
 
+class ConcurrentModificationError(VoteDomainError):
+    pass
+
+
 class Vote(BaseModel):
     model_config = ConfigDict(validate_assignment=True)
 

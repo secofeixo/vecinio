@@ -14,7 +14,7 @@ from sqlalchemy import (
     String,
     UniqueConstraint,
 )
-from sqlalchemy.dialects.postgresql import ARRAY, UUID
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -185,6 +185,31 @@ class QuotaAllocationModel(Base):
     amount: Mapped[str] = mapped_column(Numeric, nullable=False)
 
     quota: Mapped[QuotaModel] = relationship(back_populates="allocations")
+
+
+class VoteModel(Base):
+    __tablename__ = "votes"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    community_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("communities.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    title: Mapped[str] = mapped_column(String, nullable=False)
+    description: Mapped[str] = mapped_column(String, nullable=False)
+    options: Mapped[list[dict]] = mapped_column(JSONB, nullable=False)
+    end_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_by_account_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False
+    )
+    # none_as_null=True: without it, SQLAlchemy's JSON/JSONB bind processor
+    # writes a Python None as the JSON literal `null` rather than SQL NULL,
+    # which would silently break `result IS NULL` queries such as
+    # exists_open_vote_for_community.
+    result: Mapped[dict | None] = mapped_column(JSONB(none_as_null=True), nullable=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
 
 
 class RefreshTokenModel(Base):
