@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 
 from src.domain.community.value_objects import CommunityId, UnitId
 
@@ -30,3 +31,6 @@ class BallotRepository(ABC):
     async def get_active_ballot(
         self, vote_id: VoteId, unit_id: UnitId
     ) -> Ballot | None: ...
+
+    @abstractmethod
+    async def get_all_active_for_vote(self, vote_id: VoteId) -> Sequence[Ballot]: ...

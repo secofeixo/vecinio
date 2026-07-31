@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from src.domain.community.value_objects import UnitId
 from src.domain.vote.ballot import Ballot
 from src.domain.vote.repository import BallotRepository
@@ -25,6 +27,13 @@ class InMemoryBallotRepository(BallotRepository):
                 and ballot.superseded_by_ballot_id is None
             ),
             None,
+        )
+
+    async def get_all_active_for_vote(self, vote_id: VoteId) -> Sequence[Ballot]:
+        return tuple(
+            ballot
+            for ballot in self._ballots.values()
+            if ballot.vote_id == vote_id and ballot.superseded_by_ballot_id is None
         )
 
     def all(self) -> tuple[Ballot, ...]:
