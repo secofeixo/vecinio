@@ -23,3 +23,13 @@ class VoteOptionId(BaseModel):
     @staticmethod
     def generate() -> VoteOptionId:
         return VoteOptionId(value=uuid4())
+
+
+class BallotId(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    value: UUID
+
+    @staticmethod
+    def generate() -> BallotId:
+        return BallotId(value=uuid4())
