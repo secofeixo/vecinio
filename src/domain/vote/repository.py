@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from src.domain.community.value_objects import UnitId
+from src.domain.community.value_objects import CommunityId, UnitId
 
 from .ballot import Ballot
 from .value_objects import VoteId
@@ -15,6 +15,11 @@ class VoteRepository(ABC):
 
     @abstractmethod
     async def get_by_id(self, vote_id: VoteId) -> Vote | None: ...
+
+    @abstractmethod
+    async def exists_open_vote_for_community(
+        self, community_id: CommunityId
+    ) -> bool: ...
 
 
 class BallotRepository(ABC):

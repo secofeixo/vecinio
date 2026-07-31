@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import uuid4
 
@@ -21,11 +22,16 @@ from src.domain.community.value_objects import (
     ParticipationCoefficient,
     UnitId,
 )
+from src.domain.identity.value_objects import AccountId
 from src.domain.owner.owner import Owner
 from src.domain.owner.repository import OwnerRepository
 from src.domain.owner.value_objects import NIF, Email, OwnerId
+from src.domain.vote.value_objects import VoteId, VoteOptionId
+from src.domain.vote.vote import Vote
+from src.domain.vote.vote_option import VoteOption
 from tests.fakes.in_memory_community_repository import InMemoryCommunityRepository
 from tests.fakes.in_memory_owner_repository import InMemoryOwnerRepository
+from tests.fakes.in_memory_vote_repository import InMemoryVoteRepository
 
 
 def make_address() -> Address:
@@ -202,3 +208,44 @@ async def test_execute_never_saves_owner() -> None:
     )
 
     assert spy_owner_repository.save_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_assigns_owner_to_unit_even_with_an_open_vote_for_the_community() -> None:
+    unit = make_unit()
+    community = make_community(unit)
+    owner = make_owner()
+
+    community_repository = InMemoryCommunityRepository()
+    await community_repository.save(community)
+    owner_repository = InMemoryOwnerRepository()
+    await owner_repository.save(owner)
+
+    vote_repository = InMemoryVoteRepository()
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    open_vote = Vote.create(
+        id=VoteId.generate(),
+        community_id=community.id,
+        title="Título",
+        description="Descripción",
+        options=(
+            VoteOption(id=VoteOptionId.generate(), label="Sí"),
+            VoteOption(id=VoteOptionId.generate(), label="No"),
+        ),
+        end_date=now + timedelta(days=30),
+        created_by_account_id=AccountId.generate(),
+        now=now,
+    )
+    await vote_repository.save(open_vote)
+    assert await vote_repository.exists_open_vote_for_community(community.id) is True
+
+    use_case = AssignOwnerToUnit(community_repository, owner_repository)
+    await use_case.execute(
+        community_id=community.id.value,
+        unit_id=unit.id.value,
+        owner_id=owner.id.value,
+    )
+
+    persisted = await community_repository.get_by_id(community.id)
+    assert persisted is not None
+    assert persisted.units[0].owner_ids == (owner.id,)
