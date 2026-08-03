@@ -178,19 +178,33 @@ deliberadamente:
   hay que inyectar `VoteRepository` y crear el error de aplicación
   correspondiente (todavía sin nombre definitivo ni creado en código, para
   no dejar código muerto especulativo).
-- **Reintento automático ante colisión de concurrencia en `CastBallot`**: la
-  constraint `UNIQUE` parcial en BD (`ix_ballots_active_per_vote_unit`) ya
-  hace cumplir "máximo un ballot activo por unidad y votación", y el
-  repositorio ya traduce la violación a un error de dominio
-  (`ConcurrentBallotSubmissionError`). Pero `CastBallot` todavía NO captura
-  ni reintenta ante ese error — queda como un `TODO` explícito en el código.
-  Cuando se aborde: decidir si se reintenta automáticamente una vez (releer
-  el ballot activo y devolver ese error de negocio al usuario en vez de un
-  500), o si simplemente se traduce a un 409 para que el cliente reintente.
-- **Interfaz HTTP (FastAPI)**: no existe ningún router todavía para
-  `CreateVote`/`CastBallot`/`CloseVote` — solo dominio, aplicación e
-  infraestructura de persistencia están construidos. Falta la capa
-  `interfaces/api` completa para este bounded context.
+- **Interfaz HTTP (FastAPI) — ya construida**: los tres routers
+  (`CreateVote`, `CastBallot`, `CloseVote`) están implementados y probados
+  de punta a punta (e2e, incluyendo casos de concurrencia real y de
+  precedencia entre errores). Ver `CLAUDE.md`, sección "`vote` HTTP
+  interface", para el detalle técnico de las convenciones de mapeo de
+  errores fijadas al construirlos — en particular, el criterio de cuándo
+  unificar vs. diferenciar mensajes 404 para evitar oráculos de enumeración,
+  que aplica a cualquier router futuro del proyecto, no solo a `vote`.
+- **Reintento automático ante colisión de concurrencia (409/412) — sigue sin
+  decidir, ahora reencuadrado como pregunta de todo el proyecto, no solo de
+  `CastBallot`**: la constraint `UNIQUE` parcial en BD
+  (`ix_ballots_active_per_vote_unit`) ya hace cumplir "máximo un ballot
+  activo por unidad y votación", y el repositorio ya traduce la violación a
+  un error de dominio (`ConcurrentBallotSubmissionError`). Pero ningún
+  router del proyecto (ni `CastBallot`, ni `CloseVote`, ni ningún otro)
+  captura ni reintenta ante un 409/412 de concurrencia — se devuelve tal
+  cual al cliente. Al construir `CloseVote` se decidió explícitamente NO
+  resolver esto de forma aislada para ese endpoint; queda anotado en el
+  propio `responses={412: ...}` del router como decisión pendiente de
+  diseño general. Cuando se aborde: decidir si algún router debería
+  reintentar una vez automáticamente (releer el estado y responder con el
+  resultado ya calculado por quien ganó la carrera, en vez de un error que
+  el cliente no sabe cómo manejar), y si la respuesta es distinta según el
+  endpoint (p. ej. `CastBallot` sí tiene una acción de recuperación clara
+  para el cliente — reintentar el voto — mientras que un 412 en `CloseVote`
+  no le da al cliente nada útil que hacer, dado que hoy la única mutación
+  posible de un `Vote` es `close()`).
 
 ## Próximos pasos posibles (sin decidir orden)
 - Endpoint `GET /owners/me/units` (o similar) para que un `Owner` autenticado
@@ -209,9 +223,9 @@ deliberadamente:
 - Caso de uso de subdivisión/alta de `Unit` con recálculo de coeficientes —
   este es también el punto donde se aplica por fin el candado de "no tocar
   units con una votación abierta" ya construido en `vote`.
-- Interfaz HTTP (routers FastAPI) para `vote` — `CreateVote`, `CastBallot`,
-  `CloseVote` no tienen endpoint todavía.
-- Reintento/manejo de `ConcurrentBallotSubmissionError` en `CastBallot`.
+- Estrategia general de reintento/manejo de errores de concurrencia
+  (409/412) a nivel de router — pregunta de todo el proyecto, no solo de
+  `vote`; ver nota en la sección de "Votaciones" arriba.
 - Diseño de mayorías LPH por tipo de decisión, si se quiere un veredicto
   automático de aprobación en `vote` más adelante.
 - Votaciones públicas (no secretas) configurables, si se retoma esa idea.

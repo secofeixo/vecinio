@@ -157,6 +157,135 @@ code wins and this file needs fixing.
     is public at all times — this is why `Ballot`'s existence-per-unit is
     queryable independently of `VoteResult`.
 
+## `vote` HTTP interface — error-mapping conventions
+Built across three routers: `POST /communities/{community_id}/votes`
+(`CreateVote`), `POST /votes/{vote_id}/ballots` (`CastBallot`), `POST
+/votes/{vote_id}/close` (`CloseVote`). `CastBallot`/`CloseVote` deliberately
+do NOT nest under `/communities/{community_id}/...` — neither use case takes
+a `community_id` (it's derived internally from `vote.community_id`), and
+adding it to the path would require a new validation ("does this `vote_id`
+belong to this `community_id`") that doesn't exist and shouldn't be added
+just for URL aesthetics.
+
+- **Non-enumeration via unified 404 bodies**: same principle already used
+  for login (`InvalidCredentialsError`), now generalized to any check of the
+  shape "does X exist AND do you have access to it" — both branches return
+  the IDENTICAL response body, not just the same status code, precisely
+  because a differentiated message on "existence" vs. "membership" turns
+  the endpoint into an enumeration oracle for whichever identifier is
+  sensitive.
+  - `CreateVote`: `CommunityNotFoundError` and
+    `AccountNotAuthorizedToCreateVoteError` → 404, body `{"detail":
+    "Community not found or you are not a member of it"}`.
+  - `CastBallot`: `AccountNotAuthorizedToCastBallotError` covers TWO
+    distinct causes internally (account has no linked `owner_id`; owner
+    doesn't own the requested `unit_id`) unified under one 404 body:
+    `{"detail": "Not authorized to cast a ballot for this unit"}`.
+  - `CloseVote`: same pattern, its own text: `{"detail": "Not authorized to
+    close this vote"}`.
+  - **Deliberate exception, NOT unified**: `UnitNotFoundInCommunityError` in
+    `CastBallot` stays differentiated from the authorization 404 above —
+    i.e. a caller CAN tell "this unit doesn't exist in this community" apart
+    from "this unit exists but isn't yours". Accepted because `unit_id`
+    never appears in any URL of this bounded context (only inside request
+    bodies), unlike `community_id`, which is exposed in the path of `POST
+    /communities/{community_id}/votes` and could leak through shared links
+    between neighbors — that exposure asymmetry, not a general claim that
+    "unit_id is less sensitive", is the actual reason. If this stops being
+    true (e.g. `unit_id` starts appearing in a URL somewhere), revisit.
+  - Any handler backing a unified message must use a **fixed string,
+    ignoring `str(exc)`** — confirmed necessary the hard way: the same
+    exception type raised from inside an aggregate method (which
+    interpolates a pydantic Value Object into the f-string, e.g. `Vote`'s
+    own `id: VoteId`) renders differently from the same exception raised
+    from an application-layer use case (which interpolates a raw `UUID`
+    parameter) — `Vote.close()` vs. `CloseVote.execute()` producing
+    `"Vote value=UUID('...')  has already been closed"` vs. `"Vote ...
+    has already been closed"` for the literal same error is the concrete
+    example that surfaced this. Never wire a precedence-sensitive test's
+    assertion to `str(exc)` without first printing both call sites' actual
+    output side by side.
+
+- **Check-order precedence is a tested contract, not an implementation
+  detail.** Every use case's internal `if`/`raise` sequence determines which
+  error a request with multiple simultaneous problems gets — this has to be
+  pinned down explicitly (with its own e2e test per non-obvious ordering),
+  not left for whoever refactors the use case later to notice or not.
+  Confirmed orderings (see `tests/e2e/api/test_votes.py` for the actual
+  assertions):
+  - `CreateVote`: account exists → account has linked owner → community
+    exists → owns a unit in it → **then** `Vote.create()` runs (so a
+    malformed vote payload against a nonexistent/foreign community still
+    returns 404, never 400 — the membership check wins).
+  - `CastBallot`: vote exists → vote hasn't ended → account exists →
+    account has linked owner → **option belongs to vote** → community
+    exists (theoretical) → unit exists in community → **owner owns this
+    unit**. The two most counter-intuitive rows: an ended vote wins over a
+    garbage `unit_id`/`option_id` (409, not 404); and the option-membership
+    check (same exception family, different cause) is checked BEFORE the
+    "do you own this unit" check, even though both eventually map to the
+    same unified 404 body when they're the auth-shaped one.
+  - `CloseVote`: **reordered deliberately** during this work — `vote.result
+    is not None` (→ `VoteAlreadyClosedError`) is now checked in
+    `CloseVote.execute()` itself, BEFORE the `end_date` check (→
+    `VoteHasNotEndedYetError`), even though `Vote.close()` also still
+    guards the same thing internally (kept as-is, this is a deliberate
+    duplication — the aggregate protects itself regardless of which use
+    case calls it; the use case additionally short-circuits to give the
+    right precedence at the HTTP boundary). Before this change, a
+    (today-unreachable-via-normal-HTTP-flow, only-via-repository-bypass)
+    vote that was already closed but whose `end_date` hadn't arrived yet
+    would have returned "has not ended yet" instead of "already closed" —
+    rejected as the wrong contract.
+
+- **Theoretical/unreachable errors get documented, never silently dropped,
+  and never tested if testing them means bypassing the domain on purpose**:
+  - `AccountNotFoundError` (all three use cases) → 401, defense-in-depth
+    only. `get_current_account` already rejects a JWT for a deleted account
+    before any use case runs; this exception's only real reachability
+    window is the (currently accepted) gap between the dependency's read
+    and the use case's own `account_repository.get_by_id()` re-read of the
+    same account — same class of accepted race window as `Quota` overlap
+    checks elsewhere in the project. No e2e test for this; covered by the
+    use case's own unit test instead.
+  - `CommunityNotFoundError` raised from inside `CastBallot`/`CloseVote`
+    (as opposed to the one in `CreateVote`, which comes from client input)
+    means a persisted `Vote` points at a `Community` that no longer exists
+    — a data-integrity problem, not a client error → 500 + `logger.error`,
+    NOT 404 (a 404 here would misleadingly imply "fix your request").
+    Confirmed via `grep` that no delete-Community mechanism exists anywhere
+    in the codebase today (the only near-miss hit is
+    `remove_community_from_group`, which only unlinks a `Community` from a
+    `CommunityGroup`, never deletes the aggregate) — so this is phrased as
+    "no mechanism exists today", not as a designed-in invariant that
+    communities can never be deleted. No test for this case; the omission
+    is documented with an inline comment in `test_votes.py`, same pattern
+    already used in `test_assign_owner_to_unit.py` for the untested 412
+    scenario there.
+
+- **`ConcurrentBallotSubmissionError`/`ConcurrentModificationError` (409/412)
+  have no automatic retry anywhere in the project, `vote` included.** This
+  is flagged as an OPEN, project-wide design question, not a closed decision
+  local to any one endpoint: whether/how a router should retry once, surface
+  a plain 409, or something else, on a concurrency collision hasn't been
+  decided, and shouldn't be solved ad hoc for a single endpoint without
+  discussing the general strategy first. `POST /votes/{vote_id}/close`'s
+  `responses={412: ...}` docstring says this explicitly — mirror that
+  wording if this comes up again elsewhere before the general strategy is
+  designed.
+
+- **No logging configuration exists anywhere in the project.** The first
+  `logger = logging.getLogger(__name__)` in the codebase was added as part
+  of this work (for the `CommunityNotFoundError` 500 case above). There is
+  no `logging.basicConfig`, no `dictConfig`, no handler/formatter/level set
+  anywhere — `logger.error(...)` today falls back to Python's
+  `logging.lastResort` (a bare `StreamHandler` to stderr, unformatted,
+  timestamp-less). This is real but currently accepted debt, not silently
+  glossed over: app-wide logging setup (handlers, format, level, interaction
+  with uvicorn's own logger config) is a separate architectural decision,
+  not something to bolt on as a side effect of one endpoint's error
+  handling.
+
 ## Business invariants already decided (do not reopen without explicit confirmation)
 - `Owner` is an independent aggregate (own identity, can belong to 0..N communities).
 - `Unit` is an entity INSIDE the `Community` aggregate (not its own aggregate),
@@ -385,13 +514,14 @@ an integration test that failed before this fix and passes after
   and business invariants the API consumer needs to know, not a restatement
   of the code), an explicit `response_model`, and `responses={...}` documenting
   each domain-error HTTP status the endpoint can actually return (400, 404,
-  409, 412, 422) with a short English description of when it occurs. This is
-  the sole source of API documentation — FastAPI's generated OpenAPI schema
-  (`/docs`, `/openapi.json`), no hand-written docs files. **Not yet done for
-  `vote`**: no FastAPI routers exist yet for `CreateVote`/`CastBallot`/
-  `CloseVote` — only the domain, application use cases, and infrastructure
-  layers have been built so far; the `interfaces/api` layer for `vote` is
-  still pending.
+  409, 412, 422, 500) with a short English description of when it occurs.
+  This is the sole source of API documentation — FastAPI's generated OpenAPI
+  schema (`/docs`, `/openapi.json`), no hand-written docs files. `vote`'s
+  routers (`POST /communities/{community_id}/votes`, `POST
+  /votes/{vote_id}/ballots`, `POST /votes/{vote_id}/close`) are now built —
+  see the "`vote` HTTP interface" section below for the error-mapping
+  conventions established while building them, which apply to any future
+  router in the project, not just `vote`.
 
 ## Commands
 - Install dependencies: `uv sync`
@@ -409,7 +539,7 @@ an integration test that failed before this fix and passes after
   (missing constraints, wrong precision). To run this locally you need a real
   Postgres reachable at `DATABASE_URL` — use `docker compose up -d db` (see
   "Local dev DB" above), export
-  `DATABASE_URL=postgresql+psycopg://vecinio:vecinio@localhost:5433/vecinio`, # pragma: allowlist secret
+  `DATABASE_URL=postgresql+psycopg://vecinio:vecinio@localhost:5433/vecinio`,
   run `alembic upgrade head` first, then autogenerate, then `docker compose
   down` when finished. For a `postgresql_where` partial index, ALSO verify
   the generated DDL directly against a live Postgres (`\d <table>` in `psql`)
