@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
@@ -30,6 +32,24 @@ from src.application.quota.create_quota import (
 from src.application.quota.create_quota import (
     OverlappingOrdinaryQuotaError,
     QuotaNotFoundError,
+)
+from src.application.vote.cast_ballot import AccountNotAuthorizedToCastBallotError
+from src.application.vote.cast_ballot import (
+    AccountNotFoundError as CastBallotAccountNotFoundError,
+)
+from src.application.vote.cast_ballot import (
+    CommunityNotFoundError as CastBallotCommunityNotFoundError,
+)
+from src.application.vote.cast_ballot import (
+    OptionDoesNotBelongToVoteError,
+    UnitAlreadyVotedByAnotherOwnerError,
+    UnitNotFoundInCommunityError,
+)
+from src.application.vote.cast_ballot import (
+    VoteHasEndedError as CastBallotHasEndedError,
+)
+from src.application.vote.cast_ballot import (
+    VoteNotFoundError as CastBallotVoteNotFoundError,
 )
 from src.application.vote.create_vote import AccountNotAuthorizedToCreateVoteError
 from src.application.vote.create_vote import (
@@ -78,6 +98,7 @@ from src.domain.quota.quota import (
     InvalidQuotaPeriodError,
     InvalidQuotaTotalError,
 )
+from src.domain.vote.ballot import ConcurrentBallotSubmissionError
 from src.domain.vote.vote import (
     ConcurrentModificationError as VoteConcurrentModificationError,
 )
@@ -87,6 +108,8 @@ from src.domain.vote.vote import (
     InsufficientVoteOptionsError,
     VoteEndDateNotInFutureError,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _error_response(status_code: int, exc: Exception) -> JSONResponse:
@@ -126,6 +149,47 @@ async def _handle_vote_community_access_denied(
         status_code=404,
         content={"detail": "Community not found or you are not a member of it"},
     )
+
+
+async def _handle_cast_ballot_vote_not_found(
+    request: Request, exc: Exception
+) -> JSONResponse:
+    # Deliberately ignores str(exc) (which includes the vote_id) in favor of
+    # a fixed message, consistent with the other CastBallot handlers below.
+    return JSONResponse(status_code=404, content={"detail": "Vote not found"})
+
+
+async def _handle_cast_ballot_not_authorized(
+    request: Request, exc: Exception
+) -> JSONResponse:
+    # Deliberately ignores str(exc): AccountNotAuthorizedToCastBallotError
+    # covers two distinct causes (account has no linked owner, or its owner
+    # doesn't own the unit) that must return a byte-identical response so a
+    # caller can't tell them apart. Kept separate from
+    # OptionDoesNotBelongToVoteError and UnitNotFoundInCommunityError, which
+    # keep their own distinct messages -- unit_id is treated as less
+    # sensitive than community_id here, unlike CreateVote.
+    return JSONResponse(
+        status_code=404,
+        content={"detail": "Not authorized to cast a ballot for this unit"},
+    )
+
+
+async def _handle_cast_ballot_community_not_found(
+    request: Request, exc: Exception
+) -> JSONResponse:
+    # Theoretical only: a persisted Vote pointing at a Community that no
+    # longer exists. Communities are never deleted, so no known code path
+    # reaches this -- logged as an alert rather than silently 500ing, and not
+    # exercised by an automated test.
+    # KNOWN GAP (pending, not resolved here): this codebase has no logging
+    # configuration anywhere (no basicConfig/dictConfig, no handler, no
+    # formatter, no level) -- this call relies on Python's logging.lastResort
+    # fallback (unformatted, timestamp-less stderr output for WARNING+),
+    # not on any real alerting/observability setup. Do not treat this as a
+    # guarantee that an alert will actually be seen.
+    logger.error("Vote references a community that could not be found: %s", exc)
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
 
 def register_exception_handlers(app: FastAPI) -> None:
@@ -198,3 +262,19 @@ def register_exception_handlers(app: FastAPI) -> None:
     app.add_exception_handler(
         VoteConcurrentModificationError, _handle_concurrent_modification
     )
+
+    app.add_exception_handler(
+        CastBallotVoteNotFoundError, _handle_cast_ballot_vote_not_found
+    )
+    app.add_exception_handler(CastBallotHasEndedError, _handle_conflict)
+    app.add_exception_handler(CastBallotAccountNotFoundError, _handle_unauthorized)
+    app.add_exception_handler(
+        AccountNotAuthorizedToCastBallotError, _handle_cast_ballot_not_authorized
+    )
+    app.add_exception_handler(OptionDoesNotBelongToVoteError, _handle_not_found)
+    app.add_exception_handler(
+        CastBallotCommunityNotFoundError, _handle_cast_ballot_community_not_found
+    )
+    app.add_exception_handler(UnitNotFoundInCommunityError, _handle_not_found)
+    app.add_exception_handler(UnitAlreadyVotedByAnotherOwnerError, _handle_conflict)
+    app.add_exception_handler(ConcurrentBallotSubmissionError, _handle_conflict)

@@ -15,3 +15,12 @@ class CreateVoteRequest(BaseModel):
 
 class CreateVoteResponse(BaseModel):
     vote_id: UUID
+
+
+class CastBallotRequest(BaseModel):
+    unit_id: UUID
+    option_id: UUID
+
+
+class CastBallotResponse(BaseModel):
+    ballot_id: UUID

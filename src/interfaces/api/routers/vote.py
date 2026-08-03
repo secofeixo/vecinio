@@ -6,20 +6,31 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.application.vote.cast_ballot import CastBallot
 from src.application.vote.create_vote import CreateVote
 from src.domain.identity.account import Account
 from src.infrastructure.persistence.account_repository import PostgresAccountRepository
 from src.infrastructure.persistence.community_repository import (
     PostgresCommunityRepository,
 )
-from src.infrastructure.persistence.vote_repository import PostgresVoteRepository
+from src.infrastructure.persistence.vote_repository import (
+    PostgresBallotRepository,
+    PostgresVoteRepository,
+)
 from src.interfaces.api.dependencies import get_current_account, get_session
 from src.interfaces.api.schemas.vote_schemas import (
+    CastBallotRequest,
+    CastBallotResponse,
     CreateVoteRequest,
     CreateVoteResponse,
 )
 
 router = APIRouter(prefix="/communities/{community_id}/votes", tags=["vote"])
+
+# Deliberately a separate router, not nested under /communities/{community_id}:
+# CastBallot never receives or needs a community_id -- it derives the
+# community from the vote itself.
+ballot_router = APIRouter(prefix="/votes", tags=["vote"])
 
 
 @router.post(
@@ -85,3 +96,82 @@ async def create_vote(
     )
 
     return CreateVoteResponse(vote_id=vote_id.value)
+
+
+@ballot_router.post(
+    "/{vote_id}/ballots",
+    response_model=CastBallotResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Cast or correct a ballot for a vote",
+    description=(
+        "Casts a ballot for a Unit in an open vote. If the Unit already has "
+        "an active ballot cast by the SAME owner, this corrects (supersedes) "
+        "it instead of creating a second one -- a different co-owner of the "
+        "same Unit cannot override an existing ballot. The authenticated "
+        "account must be linked to an Owner who owns the target Unit. Ballot "
+        "content (which option was chosen) is secret until the vote is "
+        "closed; only the fact that the Unit has voted is visible before "
+        "then."
+    ),
+    responses={
+        401: {
+            "description": (
+                "The authenticated account could not be found. Defense in "
+                "depth only -- not reachable in practice, since "
+                "get_current_account already rejects unknown accounts."
+            )
+        },
+        404: {
+            "description": (
+                "No vote exists with the given id; OR the account is not "
+                "authorized to cast a ballot for this unit (no linked owner, "
+                "or its owner does not own the unit -- unified deliberately "
+                "into a single message so a caller cannot tell the two "
+                "causes apart); OR `option_id` does not belong to this "
+                "vote's options; OR `unit_id` does not exist in the vote's "
+                "community. Each case has its own distinct message except "
+                "the authorization one, which is intentionally unified."
+            )
+        },
+        409: {
+            "description": (
+                "The vote has already ended (`end_date` is in the past); OR "
+                "the unit already has an active ballot cast by a different "
+                "owner; OR a concurrent request raced this one for the same "
+                "vote/unit pair (partial UNIQUE constraint)."
+            )
+        },
+        422: {"description": "Request body failed validation."},
+        500: {
+            "description": (
+                "Theoretical only: the vote points at a community that no "
+                "longer exists. No known code path reaches this -- "
+                "communities are never deleted -- logged as an alert if it "
+                "ever occurs."
+            )
+        },
+    },
+)
+async def cast_ballot(
+    vote_id: UUID,
+    request: CastBallotRequest,
+    session: AsyncSession = Depends(get_session),  # noqa: B008
+    account: Account = Depends(get_current_account),  # noqa: B008
+) -> CastBallotResponse:
+    vote_repository = PostgresVoteRepository(session)
+    ballot_repository = PostgresBallotRepository(session)
+    account_repository = PostgresAccountRepository(session)
+    community_repository = PostgresCommunityRepository(session)
+    use_case = CastBallot(
+        vote_repository, ballot_repository, account_repository, community_repository
+    )
+
+    ballot_id = await use_case.execute(
+        vote_id=vote_id,
+        unit_id=request.unit_id,
+        option_id=request.option_id,
+        account_id=account.id.value,
+        now=datetime.now(timezone.utc),
+    )
+
+    return CastBallotResponse(ballot_id=ballot_id.value)
