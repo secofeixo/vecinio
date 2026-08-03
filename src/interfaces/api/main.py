@@ -10,6 +10,7 @@ from src.interfaces.api.routers.community_groups import (
 )
 from src.interfaces.api.routers.owners import router as owners_router
 from src.interfaces.api.routers.quotas import router as quotas_router
+from src.interfaces.api.routers.vote import router as vote_router
 
 app = FastAPI(
     title="Vecinio",
@@ -30,3 +31,4 @@ app.include_router(communities_router)
 app.include_router(community_groups_router)
 app.include_router(owners_router)
 app.include_router(quotas_router)
+app.include_router(vote_router)

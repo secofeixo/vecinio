@@ -31,6 +31,13 @@ from src.application.quota.create_quota import (
     OverlappingOrdinaryQuotaError,
     QuotaNotFoundError,
 )
+from src.application.vote.create_vote import AccountNotAuthorizedToCreateVoteError
+from src.application.vote.create_vote import (
+    AccountNotFoundError as CreateVoteAccountNotFoundError,
+)
+from src.application.vote.create_vote import (
+    CommunityNotFoundError as CreateVoteCommunityNotFoundError,
+)
 from src.domain.community.community import (
     ConcurrentModificationError as CommunityConcurrentModificationError,
 )
@@ -71,6 +78,15 @@ from src.domain.quota.quota import (
     InvalidQuotaPeriodError,
     InvalidQuotaTotalError,
 )
+from src.domain.vote.vote import (
+    ConcurrentModificationError as VoteConcurrentModificationError,
+)
+from src.domain.vote.vote import (
+    DuplicateVoteOptionLabelError,
+    EmptyVoteTitleError,
+    InsufficientVoteOptionsError,
+    VoteEndDateNotInFutureError,
+)
 
 
 def _error_response(status_code: int, exc: Exception) -> JSONResponse:
@@ -97,6 +113,19 @@ async def _handle_value_error(request: Request, exc: Exception) -> JSONResponse:
 
 async def _handle_unauthorized(request: Request, exc: Exception) -> JSONResponse:
     return _error_response(401, exc)
+
+
+async def _handle_vote_community_access_denied(
+    request: Request, exc: Exception
+) -> JSONResponse:
+    # Deliberately ignores str(exc): CommunityNotFoundError and
+    # AccountNotAuthorizedToCreateVoteError must return byte-identical
+    # responses, so a caller can never distinguish "no such community" from
+    # "you don't own a unit there" and enumerate community existence.
+    return JSONResponse(
+        status_code=404,
+        content={"detail": "Community not found or you are not a member of it"},
+    )
 
 
 def register_exception_handlers(app: FastAPI) -> None:
@@ -140,6 +169,14 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     app.add_exception_handler(InvalidCredentialsError, _handle_unauthorized)
     app.add_exception_handler(InvalidRefreshTokenError, _handle_unauthorized)
+    app.add_exception_handler(CreateVoteAccountNotFoundError, _handle_unauthorized)
+
+    app.add_exception_handler(
+        CreateVoteCommunityNotFoundError, _handle_vote_community_access_denied
+    )
+    app.add_exception_handler(
+        AccountNotAuthorizedToCreateVoteError, _handle_vote_community_access_denied
+    )
 
     app.add_exception_handler(DuplicateUnitIdentifierError, _handle_value_error)
     app.add_exception_handler(DuplicateCommunityGroupSlugError, _handle_value_error)
@@ -152,4 +189,12 @@ def register_exception_handlers(app: FastAPI) -> None:
     app.add_exception_handler(InvalidQuotaTotalError, _handle_value_error)
     app.add_exception_handler(EmptyQuotaAllocationsError, _handle_value_error)
     app.add_exception_handler(InvalidQuotaPeriodError, _handle_value_error)
+    app.add_exception_handler(EmptyVoteTitleError, _handle_value_error)
+    app.add_exception_handler(InsufficientVoteOptionsError, _handle_value_error)
+    app.add_exception_handler(DuplicateVoteOptionLabelError, _handle_value_error)
+    app.add_exception_handler(VoteEndDateNotInFutureError, _handle_value_error)
     app.add_exception_handler(ValueError, _handle_value_error)
+
+    app.add_exception_handler(
+        VoteConcurrentModificationError, _handle_concurrent_modification
+    )
