@@ -539,7 +539,7 @@ an integration test that failed before this fix and passes after
   (missing constraints, wrong precision). To run this locally you need a real
   Postgres reachable at `DATABASE_URL` — use `docker compose up -d db` (see
   "Local dev DB" above), export
-  `DATABASE_URL=postgresql+psycopg://vecinio:vecinio@localhost:5433/vecinio`,
+  `DATABASE_URL=postgresql+psycopg://vecinio:vecinio@localhost:5433/vecinio`, # pragma: allowlist secret
   run `alembic upgrade head` first, then autogenerate, then `docker compose
   down` when finished. For a `postgresql_where` partial index, ALSO verify
   the generated DDL directly against a live Postgres (`\d <table>` in `psql`)
