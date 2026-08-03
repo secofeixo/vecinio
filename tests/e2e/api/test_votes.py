@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from uuid import UUID, uuid4
 
 import httpx
@@ -9,12 +10,18 @@ import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
-from src.domain.community.value_objects import CommunityId
+from src.domain.community.value_objects import CommunityId, UnitId
 from src.domain.identity.value_objects import AccountId
-from src.domain.vote.value_objects import VoteId, VoteOptionId
+from src.domain.owner.value_objects import OwnerId
+from src.domain.vote.ballot import Ballot
+from src.domain.vote.value_objects import BallotId, VoteId, VoteOptionId
 from src.domain.vote.vote import Vote
 from src.domain.vote.vote_option import VoteOption
-from src.infrastructure.persistence.vote_repository import PostgresVoteRepository
+from src.domain.vote.vote_result import OptionTally, VoteResult
+from src.infrastructure.persistence.vote_repository import (
+    PostgresBallotRepository,
+    PostgresVoteRepository,
+)
 from src.interfaces.api.main import app as fastapi_app
 
 _PASSWORD = "s3cret-password"  # pragma: allowlist secret
@@ -276,6 +283,94 @@ async def _insert_ended_vote(
         await session.commit()
 
     return vote.id.value, tuple(option.id.value for option in vote.options)
+
+
+async def _insert_closed_vote_with_future_end_date(
+    database_engine: AsyncEngine,
+    *,
+    community_id: str,
+    created_by_account_id: str,
+) -> UUID:
+    """Persists a Vote that is already closed but whose end_date is still in
+    the future -- a state unreachable via the real HTTP flow (CloseVote only
+    ever reaches vote.close() after confirming now > end_date), built purely
+    to prove the precedence decided in close_vote.py: an already-closed Vote
+    must report VoteAlreadyClosedError even in this edge case, never
+    VoteHasNotEndedYetError.
+    """
+    end_date = datetime.now(timezone.utc) + timedelta(days=7)
+    creation_now = end_date - timedelta(days=8)
+    options = (
+        VoteOption(id=VoteOptionId.generate(), label="A favor"),
+        VoteOption(id=VoteOptionId.generate(), label="En contra"),
+    )
+    vote = Vote.create(
+        id=VoteId.generate(),
+        community_id=CommunityId(value=UUID(community_id)),
+        title="Vote inserted directly, already closed",
+        description="Setup for the VoteAlreadyClosedError precedence e2e test",
+        options=options,
+        end_date=end_date,
+        created_by_account_id=AccountId(value=UUID(created_by_account_id)),
+        now=creation_now,
+    )
+    vote.close(
+        VoteResult(
+            tallies=tuple(
+                OptionTally(
+                    option_id=option.id,
+                    unit_count=0,
+                    weighted_coefficient=Decimal("0"),
+                )
+                for option in options
+            ),
+            total_units_in_community=0,
+            units_that_voted=0,
+            total_participation_coefficient=Decimal("0"),
+            closed_at=creation_now,
+        )
+    )
+
+    session_factory = async_sessionmaker(database_engine, expire_on_commit=False)
+    async with session_factory() as session:
+        await PostgresVoteRepository(session).save(vote)
+        await session.commit()
+
+    return vote.id.value
+
+
+async def _insert_ballot_directly(
+    database_engine: AsyncEngine,
+    *,
+    vote_id: UUID,
+    unit_id: UUID,
+    option_id: UUID,
+    cast_by_owner_id: UUID,
+    now: datetime,
+) -> None:
+    # Bypass, same spirit as _insert_ended_vote: CastBallot itself refuses
+    # to cast a ballot once now > vote.end_date, so a ballot for an
+    # already-ended vote (needed to test CloseVote's tallying) can only be
+    # set up via direct repository access.
+    ballot = Ballot.create(
+        id=BallotId.generate(),
+        vote_id=VoteId(value=vote_id),
+        unit_id=UnitId(value=unit_id),
+        option_id=VoteOptionId(value=option_id),
+        cast_by_owner_id=OwnerId(value=cast_by_owner_id),
+        now=now,
+    )
+
+    session_factory = async_sessionmaker(database_engine, expire_on_commit=False)
+    async with session_factory() as session:
+        await PostgresBallotRepository(session).save(ballot)
+        await session.commit()
+
+
+async def _close_vote(
+    client: httpx.AsyncClient, headers: dict[str, str], vote_id: str
+) -> httpx.Response:
+    return await client.post(f"/votes/{vote_id}/close", headers=headers)
 
 
 @pytest.mark.asyncio
@@ -769,3 +864,251 @@ async def test_cast_ballot_error_messages_are_pairwise_distinct(
         unknown_unit_response.json()["detail"],
     }
     assert len(messages) == 3
+
+
+@pytest.mark.asyncio
+async def test_close_vote_returns_200_with_zero_tallies_when_no_ballots_cast(
+    client: httpx.AsyncClient,
+    auth_headers: dict[str, str],
+    database_engine: AsyncEngine,
+) -> None:
+    community, voter_headers = await _create_community_with_voter(client, auth_headers)
+    creator_account_id = await _register_account_id(
+        client, f"vote-creator-{uuid4()}@example.com"
+    )
+    vote_id, option_ids = await _insert_ended_vote(
+        database_engine,
+        community_id=community["id"],
+        created_by_account_id=creator_account_id,
+    )
+
+    response = await _close_vote(client, voter_headers, str(vote_id))
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total_units_in_community"] == 1
+    assert body["units_that_voted"] == 0
+    assert Decimal(str(body["total_participation_coefficient"])) == Decimal("0")
+    assert len(body["tallies"]) == 2
+    tallies_by_option = {tally["option_id"]: tally for tally in body["tallies"]}
+    for option_id in option_ids:
+        tally = tallies_by_option[str(option_id)]
+        assert tally["unit_count"] == 0
+        assert Decimal(str(tally["weighted_coefficient"])) == Decimal("0")
+
+
+@pytest.mark.asyncio
+async def test_close_vote_returns_200_with_tallies_reflecting_cast_ballots(
+    client: httpx.AsyncClient,
+    auth_headers: dict[str, str],
+    database_engine: AsyncEngine,
+) -> None:
+    community = await _create_community(client, auth_headers)
+    unit_id = community["units"][0]["id"]
+    owner = await _create_owner(client, auth_headers)
+    assign_response = await client.post(
+        f"/communities/{community['id']}/units/{unit_id}/owners",
+        json={"owner_id": owner["id"]},
+        headers=auth_headers,
+    )
+    assert assign_response.status_code == 200
+    voter_headers = await _register_and_login(
+        client, f"voter-{owner['id']}@example.com", owner_id=owner["id"]
+    )
+    creator_account_id = await _register_account_id(
+        client, f"vote-creator-{uuid4()}@example.com"
+    )
+    vote_id, option_ids = await _insert_ended_vote(
+        database_engine,
+        community_id=community["id"],
+        created_by_account_id=creator_account_id,
+    )
+    await _insert_ballot_directly(
+        database_engine,
+        vote_id=vote_id,
+        unit_id=UUID(unit_id),
+        option_id=option_ids[0],
+        cast_by_owner_id=UUID(owner["id"]),
+        now=datetime.now(timezone.utc) - timedelta(days=2),
+    )
+
+    response = await _close_vote(client, voter_headers, str(vote_id))
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total_units_in_community"] == 1
+    assert body["units_that_voted"] == 1
+    tallies_by_option = {tally["option_id"]: tally for tally in body["tallies"]}
+    voted_tally = tallies_by_option[str(option_ids[0])]
+    assert voted_tally["unit_count"] == 1
+    assert Decimal(str(voted_tally["weighted_coefficient"])) == Decimal("1")
+    untouched_tally = tallies_by_option[str(option_ids[1])]
+    assert untouched_tally["unit_count"] == 0
+    assert Decimal(str(body["total_participation_coefficient"])) == Decimal("1")
+
+
+@pytest.mark.asyncio
+async def test_close_vote_for_nonexistent_vote_returns_404_with_fixed_body(
+    client: httpx.AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    response = await _close_vote(client, auth_headers, str(uuid4()))
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Vote not found"}
+
+
+@pytest.mark.asyncio
+async def test_close_vote_already_closed_returns_409_even_when_end_date_is_future(
+    client: httpx.AsyncClient,
+    auth_headers: dict[str, str],
+    database_engine: AsyncEngine,
+) -> None:
+    # Precedence test for the reorder in close_vote.py: this Vote is closed
+    # AND its end_date is still in the future (only reachable via a
+    # repository bypass) -- if the ordering were wrong, this would surface
+    # as VoteHasNotEndedYetError instead.
+    community, voter_headers = await _create_community_with_voter(client, auth_headers)
+    creator_account_id = await _register_account_id(
+        client, f"vote-creator-{uuid4()}@example.com"
+    )
+    vote_id = await _insert_closed_vote_with_future_end_date(
+        database_engine,
+        community_id=community["id"],
+        created_by_account_id=creator_account_id,
+    )
+
+    response = await _close_vote(client, voter_headers, str(vote_id))
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "Vote has already been closed"}
+
+
+@pytest.mark.asyncio
+async def test_close_vote_that_is_already_closed_via_normal_flow_returns_409(
+    client: httpx.AsyncClient,
+    auth_headers: dict[str, str],
+    database_engine: AsyncEngine,
+) -> None:
+    community, voter_headers = await _create_community_with_voter(client, auth_headers)
+    creator_account_id = await _register_account_id(
+        client, f"vote-creator-{uuid4()}@example.com"
+    )
+    vote_id, _option_ids = await _insert_ended_vote(
+        database_engine,
+        community_id=community["id"],
+        created_by_account_id=creator_account_id,
+    )
+
+    first_response = await _close_vote(client, voter_headers, str(vote_id))
+    assert first_response.status_code == 200
+
+    second_response = await _close_vote(client, voter_headers, str(vote_id))
+
+    assert second_response.status_code == 409
+    assert second_response.json() == {"detail": "Vote has already been closed"}
+
+
+@pytest.mark.asyncio
+async def test_close_vote_before_end_date_returns_409(
+    client: httpx.AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    community, voter_headers = await _create_community_with_voter(client, auth_headers)
+    vote = await _create_vote(client, voter_headers, community["id"])
+
+    response = await _close_vote(client, voter_headers, vote["vote_id"])
+
+    assert response.status_code == 409
+    assert response.json()["detail"] != "Vote has already been closed"
+
+
+@pytest.mark.asyncio
+async def test_close_vote_by_account_without_linked_owner_returns_404_with_unified_body(
+    client: httpx.AsyncClient,
+    auth_headers: dict[str, str],
+    database_engine: AsyncEngine,
+) -> None:
+    # auth_headers' account has no owner_id link at all, so it owns no unit
+    # anywhere -- AccountNotAuthorizedToCloseVoteError, unified deliberately
+    # with the "owner doesn't own a unit in this community" case below.
+    community, voter_headers = await _create_community_with_voter(client, auth_headers)
+    creator_account_id = await _register_account_id(
+        client, f"vote-creator-{uuid4()}@example.com"
+    )
+    vote_id, _option_ids = await _insert_ended_vote(
+        database_engine,
+        community_id=community["id"],
+        created_by_account_id=creator_account_id,
+    )
+
+    response = await _close_vote(client, auth_headers, str(vote_id))
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Not authorized to close this vote"}
+
+
+@pytest.mark.asyncio
+async def test_close_vote_by_owner_of_different_community_returns_404_with_same_unified_body(
+    client: httpx.AsyncClient,
+    auth_headers: dict[str, str],
+    database_engine: AsyncEngine,
+) -> None:
+    # voter_x_headers' account owns a unit in community X, but the vote
+    # being closed belongs to community Y, where it owns nothing -- still
+    # AccountNotAuthorizedToCloseVoteError, must stay byte-identical to the
+    # no-linked-owner case above.
+    _community_x, voter_x_headers = await _create_community_with_voter(
+        client, auth_headers
+    )
+    community_y, _voter_y_headers = await _create_community_with_voter(
+        client, auth_headers, cif="A58818501", nif="X1234567L"
+    )
+    creator_account_id = await _register_account_id(
+        client, f"vote-creator-{uuid4()}@example.com"
+    )
+    vote_id, _option_ids = await _insert_ended_vote(
+        database_engine,
+        community_id=community_y["id"],
+        created_by_account_id=creator_account_id,
+    )
+
+    response = await _close_vote(client, voter_x_headers, str(vote_id))
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Not authorized to close this vote"}
+
+
+@pytest.mark.asyncio
+async def test_close_vote_concurrent_close_requests_yield_exactly_one_success(
+    client: httpx.AsyncClient,
+    auth_headers: dict[str, str],
+    database_engine: AsyncEngine,
+) -> None:
+    # Two concurrent close requests for the SAME already-ended vote, same
+    # authorized voter, racing against the same real Postgres testcontainer
+    # (not two independent in-memory fakes). Both pass every check up to
+    # vote.close()/save() -- the loser fails at the optimistic-concurrency
+    # version check (412) if it read the vote before the winner committed,
+    # or sees VoteAlreadyClosedError (409) if its read happens after the
+    # winner's commit. Which of the two fires is real, non-deterministic
+    # timing -- exactly one request must still succeed.
+    community, voter_headers = await _create_community_with_voter(client, auth_headers)
+    creator_account_id = await _register_account_id(
+        client, f"vote-creator-{uuid4()}@example.com"
+    )
+    vote_id, _option_ids = await _insert_ended_vote(
+        database_engine,
+        community_id=community["id"],
+        created_by_account_id=creator_account_id,
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=fastapi_app), base_url="http://test"
+    ) as second_client:
+        response_a, response_b = await asyncio.gather(
+            _close_vote(client, voter_headers, str(vote_id)),
+            _close_vote(second_client, voter_headers, str(vote_id)),
+        )
+
+    status_codes = [response_a.status_code, response_b.status_code]
+    assert status_codes.count(200) == 1
+    assert set(status_codes) <= {200, 409, 412}

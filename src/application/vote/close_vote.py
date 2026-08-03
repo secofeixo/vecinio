@@ -9,6 +9,7 @@ from src.domain.identity.value_objects import AccountId
 from src.domain.vote.calculation import calculate_vote_result
 from src.domain.vote.repository import BallotRepository, VoteRepository
 from src.domain.vote.value_objects import VoteId
+from src.domain.vote.vote import VoteAlreadyClosedError
 from src.domain.vote.vote_result import VoteResult
 
 
@@ -56,6 +57,15 @@ class CloseVote:
         vote = await self._vote_repository.get_by_id(vote_id_vo)
         if vote is None:
             raise VoteNotFoundError(f"No vote found with id {vote_id}")
+
+        # Checked here, before the end_date check, so an already-closed vote
+        # always surfaces as VoteAlreadyClosedError -- even in the edge case
+        # (unreachable via normal HTTP flow, only via a repository bypass)
+        # where end_date hasn't arrived yet. Vote.close() keeps its own
+        # identical check below as the aggregate's own protection for any
+        # other entry point -- deliberate duplication, not merged into one.
+        if vote.result is not None:
+            raise VoteAlreadyClosedError(f"Vote {vote_id} has already been closed")
 
         if not now > vote.end_date:
             raise VoteHasNotEndedYetError(

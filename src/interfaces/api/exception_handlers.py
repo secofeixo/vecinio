@@ -51,6 +51,17 @@ from src.application.vote.cast_ballot import (
 from src.application.vote.cast_ballot import (
     VoteNotFoundError as CastBallotVoteNotFoundError,
 )
+from src.application.vote.close_vote import AccountNotAuthorizedToCloseVoteError
+from src.application.vote.close_vote import (
+    AccountNotFoundError as CloseVoteAccountNotFoundError,
+)
+from src.application.vote.close_vote import (
+    CommunityNotFoundError as CloseVoteCommunityNotFoundError,
+)
+from src.application.vote.close_vote import VoteHasNotEndedYetError
+from src.application.vote.close_vote import (
+    VoteNotFoundError as CloseVoteVoteNotFoundError,
+)
 from src.application.vote.create_vote import AccountNotAuthorizedToCreateVoteError
 from src.application.vote.create_vote import (
     AccountNotFoundError as CreateVoteAccountNotFoundError,
@@ -106,6 +117,7 @@ from src.domain.vote.vote import (
     DuplicateVoteOptionLabelError,
     EmptyVoteTitleError,
     InsufficientVoteOptionsError,
+    VoteAlreadyClosedError,
     VoteEndDateNotInFutureError,
 )
 
@@ -151,11 +163,11 @@ async def _handle_vote_community_access_denied(
     )
 
 
-async def _handle_cast_ballot_vote_not_found(
-    request: Request, exc: Exception
-) -> JSONResponse:
+async def _handle_vote_not_found(request: Request, exc: Exception) -> JSONResponse:
     # Deliberately ignores str(exc) (which includes the vote_id) in favor of
-    # a fixed message, consistent with the other CastBallot handlers below.
+    # a fixed message. Shared by CastBallot's and CloseVote's VoteNotFoundError
+    # -- both mean exactly the same thing ("no such vote") and should return
+    # byte-identical bodies.
     return JSONResponse(status_code=404, content={"detail": "Vote not found"})
 
 
@@ -175,13 +187,14 @@ async def _handle_cast_ballot_not_authorized(
     )
 
 
-async def _handle_cast_ballot_community_not_found(
+async def _handle_vote_persisted_community_not_found(
     request: Request, exc: Exception
 ) -> JSONResponse:
     # Theoretical only: a persisted Vote pointing at a Community that no
     # longer exists. Communities are never deleted, so no known code path
     # reaches this -- logged as an alert rather than silently 500ing, and not
-    # exercised by an automated test.
+    # exercised by an automated test. Shared by CastBallot's and CloseVote's
+    # CommunityNotFoundError -- same theoretical scenario, same handling.
     # KNOWN GAP (pending, not resolved here): this codebase has no logging
     # configuration anywhere (no basicConfig/dictConfig, no handler, no
     # formatter, no level) -- this call relies on Python's logging.lastResort
@@ -190,6 +203,35 @@ async def _handle_cast_ballot_community_not_found(
     # guarantee that an alert will actually be seen.
     logger.error("Vote references a community that could not be found: %s", exc)
     return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+
+
+async def _handle_close_vote_not_authorized(
+    request: Request, exc: Exception
+) -> JSONResponse:
+    # Deliberately ignores str(exc): AccountNotAuthorizedToCloseVoteError
+    # covers two distinct causes (account has no linked owner, or its owner
+    # doesn't own any unit in the vote's community) that must return a
+    # byte-identical response so a caller can't tell them apart. Distinct
+    # wording from CastBallot's unified message on purpose -- that one is
+    # about a specific unit, this one is about closing the vote itself.
+    return JSONResponse(
+        status_code=404,
+        content={"detail": "Not authorized to close this vote"},
+    )
+
+
+async def _handle_vote_already_closed(request: Request, exc: Exception) -> JSONResponse:
+    # Dedicated fixed-message handler, NOT the generic _handle_conflict:
+    # VoteAlreadyClosedError is raised both by CloseVote.execute() (own
+    # duplicate check, see close_vote.py) and by Vote.close() (the
+    # aggregate's own guard), and their f-string messages differ in format
+    # (one embeds a raw UUID, the other a VoteId's pydantic str()) --
+    # str(exc) would make the HTTP response depend on which of the two raised
+    # it. A fixed message avoids that coupling entirely.
+    return JSONResponse(
+        status_code=409,
+        content={"detail": "Vote has already been closed"},
+    )
 
 
 def register_exception_handlers(app: FastAPI) -> None:
@@ -263,9 +305,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         VoteConcurrentModificationError, _handle_concurrent_modification
     )
 
-    app.add_exception_handler(
-        CastBallotVoteNotFoundError, _handle_cast_ballot_vote_not_found
-    )
+    app.add_exception_handler(CastBallotVoteNotFoundError, _handle_vote_not_found)
     app.add_exception_handler(CastBallotHasEndedError, _handle_conflict)
     app.add_exception_handler(CastBallotAccountNotFoundError, _handle_unauthorized)
     app.add_exception_handler(
@@ -273,8 +313,19 @@ def register_exception_handlers(app: FastAPI) -> None:
     )
     app.add_exception_handler(OptionDoesNotBelongToVoteError, _handle_not_found)
     app.add_exception_handler(
-        CastBallotCommunityNotFoundError, _handle_cast_ballot_community_not_found
+        CastBallotCommunityNotFoundError, _handle_vote_persisted_community_not_found
     )
     app.add_exception_handler(UnitNotFoundInCommunityError, _handle_not_found)
     app.add_exception_handler(UnitAlreadyVotedByAnotherOwnerError, _handle_conflict)
     app.add_exception_handler(ConcurrentBallotSubmissionError, _handle_conflict)
+
+    app.add_exception_handler(CloseVoteVoteNotFoundError, _handle_vote_not_found)
+    app.add_exception_handler(VoteAlreadyClosedError, _handle_vote_already_closed)
+    app.add_exception_handler(VoteHasNotEndedYetError, _handle_conflict)
+    app.add_exception_handler(CloseVoteAccountNotFoundError, _handle_unauthorized)
+    app.add_exception_handler(
+        AccountNotAuthorizedToCloseVoteError, _handle_close_vote_not_authorized
+    )
+    app.add_exception_handler(
+        CloseVoteCommunityNotFoundError, _handle_vote_persisted_community_not_found
+    )

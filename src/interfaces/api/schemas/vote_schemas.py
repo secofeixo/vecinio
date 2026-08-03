@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -24,3 +25,17 @@ class CastBallotRequest(BaseModel):
 
 class CastBallotResponse(BaseModel):
     ballot_id: UUID
+
+
+class OptionTallyResponse(BaseModel):
+    option_id: UUID
+    unit_count: int
+    weighted_coefficient: Decimal
+
+
+class CloseVoteResponse(BaseModel):
+    tallies: list[OptionTallyResponse]
+    total_units_in_community: int
+    units_that_voted: int
+    total_participation_coefficient: Decimal
+    closed_at: datetime
