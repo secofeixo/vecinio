@@ -1,8 +1,14 @@
 <script setup>
-import { RouterView } from 'vue-router'
+import { RouterView, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 
 const auth = useAuthStore()
+const router = useRouter()
+
+function handleLogout() {
+  auth.logout()
+  router.push({ name: 'login' })
+}
 </script>
 
 <template>
@@ -11,7 +17,7 @@ const auth = useAuthStore()
       <v-btn variant="text" :to="{ name: 'my-units' }">Mis viviendas</v-btn>
       <v-btn variant="text" :to="{ name: 'community-create' }">Nueva comunidad</v-btn>
       <v-spacer />
-      <v-btn variant="text" @click="auth.logout()">Cerrar sesión</v-btn>
+      <v-btn variant="text" @click="handleLogout">Cerrar sesión</v-btn>
     </v-app-bar>
 
     <v-main>
