@@ -4,29 +4,18 @@ import re
 from collections.abc import Iterable
 from decimal import Decimal
 from typing import ClassVar
-from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
-
-class CommunityId(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    value: UUID
-
-    @staticmethod
-    def generate() -> CommunityId:
-        return CommunityId(value=uuid4())
+from src.domain.shared.value_objects import AggregateId
 
 
-class UnitId(BaseModel):
-    model_config = ConfigDict(frozen=True)
+class CommunityId(AggregateId):
+    pass
 
-    value: UUID
 
-    @staticmethod
-    def generate() -> UnitId:
-        return UnitId(value=uuid4())
+class UnitId(AggregateId):
+    pass
 
 
 class Address(BaseModel):

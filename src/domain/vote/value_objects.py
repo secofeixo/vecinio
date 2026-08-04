@@ -1,35 +1,15 @@
 from __future__ import annotations
 
-from uuid import UUID, uuid4
-
-from pydantic import BaseModel, ConfigDict
+from src.domain.shared.value_objects import AggregateId
 
 
-class VoteId(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    value: UUID
-
-    @staticmethod
-    def generate() -> VoteId:
-        return VoteId(value=uuid4())
+class VoteId(AggregateId):
+    pass
 
 
-class VoteOptionId(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    value: UUID
-
-    @staticmethod
-    def generate() -> VoteOptionId:
-        return VoteOptionId(value=uuid4())
+class VoteOptionId(AggregateId):
+    pass
 
 
-class BallotId(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    value: UUID
-
-    @staticmethod
-    def generate() -> BallotId:
-        return BallotId(value=uuid4())
+class BallotId(AggregateId):
+    pass

@@ -1,19 +1,12 @@
 from __future__ import annotations
 
 from enum import Enum
-from uuid import UUID, uuid4
 
-from pydantic import BaseModel, ConfigDict
+from src.domain.shared.value_objects import AggregateId
 
 
-class QuotaId(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    value: UUID
-
-    @staticmethod
-    def generate() -> QuotaId:
-        return QuotaId(value=uuid4())
+class QuotaId(AggregateId):
+    pass
 
 
 class QuotaType(str, Enum):

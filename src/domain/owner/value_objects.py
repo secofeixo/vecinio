@@ -1,19 +1,14 @@
 from __future__ import annotations
 
 import re
-from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
+from src.domain.shared.value_objects import AggregateId
 
-class OwnerId(BaseModel):
-    model_config = ConfigDict(frozen=True)
 
-    value: UUID
-
-    @staticmethod
-    def generate() -> OwnerId:
-        return OwnerId(value=uuid4())
+class OwnerId(AggregateId):
+    pass
 
 
 _NIF_PATTERN = re.compile(r"^[0-9]{8}[A-Z]$")
