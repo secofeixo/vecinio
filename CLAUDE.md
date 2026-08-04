@@ -24,7 +24,8 @@ code wins and this file needs fixing.
   argon2id (NOT passlib — unmaintained, compatibility warnings with modern
   bcrypt; NOT bcrypt directly — 72-byte silent truncation footgun that argon2id
   doesn't have).
-- **Frontend**: Vue 3 (Composition API) + Pinia — not started yet.
+- **Frontend**: Vue 3 (Composition API) + Pinia. Started — see the "Frontend"
+  section below for the full stack and conventions.
 - **Testing**: pytest + pytest-asyncio (strict mode, explicit `@pytest.mark.asyncio`,
   no `asyncio_mode = auto` configured). Unit (no I/O) / integration (real Postgres
   via testcontainers) / e2e (httpx.AsyncClient against the FastAPI app, same
@@ -552,6 +553,66 @@ an integration test that failed before this fix and passes after
   NO hook (black, isort, flake8, mypy, pydocstyle, complexipy, detect-secrets)
   has ever actually checked any file under `migrations/versions/`, for any
   migration, ever. This is a known, accepted gap, not yet revisited.
+- Run local frontend dev server: `cd frontend && npm run dev` (serves on
+  `http://localhost:5173` by default; requires the backend running too, see
+  "Run local API" above, plus `docker compose up -d db`).
+
+## Frontend
+`frontend/` was an empty placeholder until the first slice (auth +
+register-a-Community-with-its-Units) was built. Stack, decided at that
+point:
+- **Build tool**: Vite, scaffolded via `npm create vue@latest` (the official
+  `create-vue` scaffolder — chosen over Vuetify's own `create-vuetify`
+  wizard because its generated layout is more predictable/reviewable).
+  JavaScript, NOT TypeScript, for now — deliberate: the person building this
+  is new to the Composition API, to Vuetify's component API, and to
+  component-library-driven UI (no prior UX/UI design background) all at
+  once; adding TS as a fourth simultaneous unknown was judged likely to
+  cause tooling friction rather than product-logic friction. Revisit once
+  the Composition API feels comfortable — migrating a Vite project to TS
+  later is cheap.
+- **UI library**: Vuetify (Material Design components) + `@mdi/font` for
+  icons, wired via `vite-plugin-vuetify`. Chosen deliberately over
+  PrimeVue/Tailwind: Vuetify's opinionated Material Design defaults
+  (layout, spacing, color roles) remove most of the visual-design decisions
+  a UX-inexperienced developer would otherwise have to make from scratch.
+- **State**: Pinia (per the Tech stack entry above). **Routing**:
+  `vue-router`, scaffolded by `create-vue`.
+- **HTTP client**: `axios`, wrapped in a single `src/api/client.js` instance
+  — request interceptor attaches `Authorization: Bearer <token>` from the
+  Pinia auth store (skipped for the public `/auth/*` calls); response
+  interceptor logs out and redirects to `/login` on any `401`. No
+  automatic refresh-and-retry-on-401 loop exists yet — deliberately
+  deferred (needs a request queue to avoid parallel refresh calls; the
+  15-minute access token TTL made this non-essential for the first slice).
+- **Auth token storage**: plain `localStorage`, written through from Pinia
+  store actions (not httpOnly cookies — the backend returns tokens as JSON
+  fields, not `Set-Cookie`, and adopting cookies would need backend changes
+  — CSRF handling, `SameSite`/`Secure` flags — not done; not memory-only
+  Pinia state either, since that would log the user out on every page
+  refresh). Accepted trade-off: `localStorage` is readable by any JS
+  running on the page, so an XSS hole would expose both the access token
+  and the 30-day refresh token. Fine for a pre-production app with no real
+  HOA member data yet — revisit before that stops being true.
+- **No `/auth/me` endpoint exists on the backend** — the frontend cannot
+  fetch "who am I" after login from the server; anything needing the
+  current account's identity today must decode the JWT client-side or wait
+  for that endpoint to be built.
+- **No community/owner/vote list endpoints exist yet** — only
+  `GET /communities/{id}` and `GET /communities/{id}/quotas/{id}` (by id).
+  There is no "browse all my communities" screen possible yet; a created
+  Community is only reachable by navigating straight to its detail route
+  right after creation.
+- **Units can only be created inline as part of `POST /communities`** — no
+  standalone "add a unit to an existing community" endpoint exists (see
+  "Bounded contexts implemented so far" above). This is why the first
+  frontend flow is a single combined community+units form, not two
+  separate ones — it mirrors what the backend actually supports, not an
+  arbitrary UI simplification.
+- CORS is now configured in `src/interfaces/api/main.py`
+  (`CORSMiddleware`), but the allowed-origins list is hardcoded to Vite's
+  local dev ports (`localhost:5173`/`127.0.0.1:5173`) — must become
+  environment-driven before any real deployment.
 
 ## Domain purity exception: pydantic
 `domain/` uses `pydantic.BaseModel` for Entities, Value Objects, and Aggregates.
@@ -569,8 +630,6 @@ discussion.
 - Do not introduce CQRS, Event Sourcing, or a second database.
 - Do not add dependencies to `domain/` beyond pydantic without discussing the
   specific trade-off first.
-- Do not touch `frontend/` yet — out of scope until the backend has stable use
-  cases covering more of the real domain (quotas, incidents, votes).
 - Do not add `asyncpg` — the project standardized on `psycopg` (async) as the
   single Postgres driver.
 - Do not use `passlib` for anything — unmaintained, already replaced by
@@ -583,3 +642,6 @@ discussion.
   without discussing the retry strategy first — the error exists and is
   correctly raised by the repository, but the application-layer handling of
   it (retry once? surface a 409? something else?) hasn't been decided.
+
+# Session-digest file
+Read the file .claude/session_digest.md to have more context of the current project.

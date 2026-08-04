@@ -76,6 +76,7 @@ from src.domain.community.community import (
     DuplicateCifError,
     DuplicateUnitIdentifierError,
     OwnerAlreadyAssignedError,
+    ParticipationCoefficientSumError,
     UnitNotFoundError,
 )
 from src.domain.community_group.community_group import (
@@ -285,6 +286,7 @@ def register_exception_handlers(app: FastAPI) -> None:
     )
 
     app.add_exception_handler(DuplicateUnitIdentifierError, _handle_value_error)
+    app.add_exception_handler(ParticipationCoefficientSumError, _handle_value_error)
     app.add_exception_handler(DuplicateCommunityGroupSlugError, _handle_value_error)
     app.add_exception_handler(InvalidCommunityGroupNameError, _handle_value_error)
     app.add_exception_handler(

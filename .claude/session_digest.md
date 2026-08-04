@@ -230,4 +230,13 @@ deliberadamente:
   automático de aprobación en `vote` más adelante.
 - Votaciones públicas (no secretas) configurables, si se retoma esa idea.
 - Bounded contexts de negocio nuevos: incidencias.
-- Frontend Vue — no iniciado.
+- **Frontend Vue — primera parte ya construida** (Vite + Pinia + vue-router +
+  Vuetify 4 + axios; ver `CLAUDE.md`, sección "Frontend", para el stack y las
+  decisiones técnicas): registro, login, y alta de `Community` con sus
+  `Unit`s en un único formulario. De camino se corrigieron dos huecos del
+  backend que bloqueaban esto: CORS no estaba configurado en ningún sitio, y
+  `ParticipationCoefficientSumError` no tenía handler registrado (devolvía
+  500 en vez de 400). Pendiente, sin construir todavía: pantallas de alta de
+  `Owner` y asignación a `Unit`, de `quota` y de `vote`; no hay pantalla de
+  "mis comunidades" posible porque no existe ningún endpoint de listado
+  (`GET /communities`), solo `GET /communities/{id}`.
