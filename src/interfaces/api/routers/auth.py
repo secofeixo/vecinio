@@ -7,14 +7,16 @@ from src.application.identity.login import Login
 from src.application.identity.logout import Logout
 from src.application.identity.refresh_access_token import RefreshAccessToken
 from src.application.identity.register_account import RegisterAccount
+from src.domain.identity.account import Account
 from src.infrastructure.persistence.account_repository import PostgresAccountRepository
 from src.infrastructure.persistence.owner_repository import PostgresOwnerRepository
 from src.infrastructure.persistence.refresh_token_repository import (
     PostgresRefreshTokenRepository,
 )
-from src.interfaces.api.dependencies import get_session
+from src.interfaces.api.dependencies import get_current_account, get_session
 from src.interfaces.api.schemas.auth_schemas import (
     AccessTokenResponse,
+    AccountMeResponse,
     LoginRequest,
     LogoutRequest,
     RefreshRequest,
@@ -22,6 +24,7 @@ from src.interfaces.api.schemas.auth_schemas import (
     RegisterAccountResponse,
     TokenResponse,
 )
+from src.interfaces.api.schemas.owner_schemas import OwnerResponse
 
 router = APIRouter(prefix="/auth", tags=["identity"])
 
@@ -147,3 +150,48 @@ async def logout(
     use_case = Logout(repository)
 
     await use_case.execute(refresh_token=request.refresh_token)
+
+
+@router.get(
+    "/me",
+    response_model=AccountMeResponse,
+    summary="Get the identity of the currently authenticated account",
+    description=(
+        "Returns the Account behind the current access token, plus its "
+        "linked Owner embedded in full, if any. Account and Owner are "
+        "separate identities linked only by id — `owner` is null when no "
+        "Owner has been linked yet via `owner_id` at registration time."
+    ),
+    responses={
+        401: {
+            "description": (
+                "Missing, invalid, expired, or malformed access token, or "
+                "the account behind it no longer exists."
+            )
+        },
+    },
+)
+async def get_me(
+    session: AsyncSession = Depends(get_session),  # noqa: B008
+    account: Account = Depends(get_current_account),  # noqa: B008
+) -> AccountMeResponse:
+    owner_response: OwnerResponse | None = None
+    if account.owner_id is not None:
+        owner_repository = PostgresOwnerRepository(session)
+        owner = await owner_repository.get_by_id(account.owner_id)
+        if owner is None:
+            raise RuntimeError(
+                f"Account {account.id.value} references owner_id "
+                f"{account.owner_id.value} that does not exist in the database"
+            )
+        owner_response = OwnerResponse(
+            id=owner.id.value,
+            nif=owner.nif.value,
+            full_name=owner.full_name,
+            email=owner.email.value,
+            phone=owner.phone.value if owner.phone is not None else None,
+        )
+
+    return AccountMeResponse(
+        id=account.id.value, email=account.email.value, owner=owner_response
+    )

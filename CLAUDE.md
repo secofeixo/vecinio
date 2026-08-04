@@ -287,6 +287,58 @@ just for URL aesthetics.
   not something to bolt on as a side effect of one endpoint's error
   handling.
 
+## `identity` HTTP interface — `GET /auth/me`
+First protected read-style endpoint in `identity` (`register`/`login`/
+`refresh`/`logout` are all public, token-issuing endpoints). Design decisions
+made building it, several deliberately deviating from or extending existing
+project patterns — noted here so they're not mistaken for oversights:
+
+- **No dedicated use case class** — the router calls
+  `OwnerRepository.get_by_id(account.owner_id)` directly (when `owner_id is
+  not None`), matching the project's only precedent for a pure read (`GET
+  /communities/{id}`, `GET /communities/{id}/quotas/{id}`: router →
+  repository directly, no `GetX` use case). The project has zero read-only
+  use case classes anywhere; do not introduce one for a future read endpoint
+  without discussing it first.
+- **Reuses the `Account` already returned by `get_current_account`
+  (`dependencies.py:32-52`) — no second `AccountRepository.get_by_id()`
+  call.** That dependency already re-reads the account from Postgres on
+  every request; calling it again here would just be a redundant read, not
+  extra safety.
+- **`Owner` is embedded in full** (`AccountMeResponse.owner: OwnerResponse |
+  None`), not just `owner_id` — because no `GET /owners/{id}` endpoint
+  exists yet, so returning a bare id would give the frontend no way to ever
+  fetch the linked Owner's `full_name`/NIF/phone. This is the **first
+  cross-schema-module import** in the project (`auth_schemas.py` imports
+  `OwnerResponse` from `owner_schemas.py`) — every other nested response
+  schema until now composed sub-schemas defined in the same file, because
+  every prior nesting was intra-aggregate (e.g. `CommunityResponse.units:
+  list[UnitResponse]`); this is the first cross-aggregate read in the
+  project.
+- **`version` deliberately not exposed** — `/auth/me` is a pure read with no
+  follow-up mutation on `Account` through this endpoint (unlike
+  `QuotaResponse`, which does expose `version`, since `Quota` has no mutation
+  either but the field was carried over from the aggregate anyway — mixed
+  precedent noted, not a hard rule).
+- **A dangling `account.owner_id` is handled as a bare `RuntimeError`, not a
+  registered domain error with an HTTP mapping** — deliberately simpler than
+  the analogous "theoretical" `CommunityNotFoundError`-from-inside-`vote` 500
+  case (`## Business invariants` below). The two look similar but are NOT
+  the same strength of guarantee: `Community` has no delete mechanism today
+  (an absence, could change), while `accounts.owner_id` carries a real
+  DB-level FK (`ON DELETE SET NULL`, `models.py:93-94`) — so a `owner_id`
+  pointing at a nonexistent `Owner` is actively prevented by the schema, not
+  just unobserved in practice. Same bare-`RuntimeError` pattern already used
+  in `owners.py:47-50` for its own immediate-reread-after-write case. Not
+  covered by any test — cannot be provoked without bypassing the FK.
+- Tests (`tests/e2e/api/test_auth.py`) added the project's first assertion
+  on the **body** of `get_current_account`'s 401
+  (`{"detail": "Invalid or expired token"}`) and its first tampered/invalid-
+  signature-token test case. Every prior `..._without_auth_header_returns_401`
+  test in the project only asserted the status code, and only for the
+  "header missing entirely" case — which is actually rejected upstream by
+  `OAuth2PasswordBearer` before `get_current_account`'s own logic ever runs.
+
 ## Business invariants already decided (do not reopen without explicit confirmation)
 - `Owner` is an independent aggregate (own identity, can belong to 0..N communities).
 - `Unit` is an entity INSIDE the `Community` aggregate (not its own aggregate),
@@ -594,10 +646,13 @@ point:
   running on the page, so an XSS hole would expose both the access token
   and the 30-day refresh token. Fine for a pre-production app with no real
   HOA member data yet — revisit before that stops being true.
-- **No `/auth/me` endpoint exists on the backend** — the frontend cannot
-  fetch "who am I" after login from the server; anything needing the
-  current account's identity today must decode the JWT client-side or wait
-  for that endpoint to be built.
+- **`GET /auth/me` now exists** — returns the current `Account`'s `id`/
+  `email` plus its linked `Owner` embedded in full (`nif`/`full_name`/
+  `email`/`phone`), or `owner: null` if none is linked. See the
+  "`identity` HTTP interface" section below for the design decisions behind
+  its shape. The frontend does not call it from anywhere yet — wiring it
+  into the Pinia auth store (e.g. on app boot, replacing client-side JWT
+  decoding for "who am I") is still pending.
 - **No community/owner/vote list endpoints exist yet** — only
   `GET /communities/{id}` and `GET /communities/{id}/quotas/{id}` (by id).
   There is no "browse all my communities" screen possible yet; a created

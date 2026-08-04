@@ -4,6 +4,8 @@ from uuid import UUID
 
 from pydantic import BaseModel
 
+from src.interfaces.api.schemas.owner_schemas import OwnerResponse
+
 
 class RegisterAccountRequest(BaseModel):
     email: str
@@ -37,3 +39,9 @@ class AccessTokenResponse(BaseModel):
 
 class LogoutRequest(BaseModel):
     refresh_token: str
+
+
+class AccountMeResponse(BaseModel):
+    id: UUID
+    email: str
+    owner: OwnerResponse | None = None

@@ -12,6 +12,15 @@ def _account_payload(
     return {"email": email, "password": password}
 
 
+def _owner_payload(nif: str = "12345678Z", email: str = "owner@example.com") -> dict:
+    return {
+        "nif": nif,
+        "full_name": "Jane Doe",
+        "email": email,
+        "phone": "+34600111222",
+    }
+
+
 @pytest.mark.asyncio
 async def test_register_returns_201_without_leaking_hash_or_tokens(
     client: httpx.AsyncClient,
@@ -159,3 +168,89 @@ async def test_logout_with_unknown_token_returns_401(
     response = await client.post("/auth/logout", json={"refresh_token": "never-issued"})
 
     assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_get_me_without_linked_owner_returns_200_with_null_owner(
+    client: httpx.AsyncClient,
+) -> None:
+    await client.post("/auth/register", json=_account_payload())
+    login_response = await client.post("/auth/login", json=_account_payload())
+    access_token = login_response.json()["access_token"]
+
+    response = await client.get(
+        "/auth/me", headers={"Authorization": f"Bearer {access_token}"}
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert "id" in body
+    assert body["email"] == _account_payload()["email"]
+    assert body["owner"] is None
+
+
+@pytest.mark.asyncio
+async def test_get_me_with_linked_owner_returns_200_with_embedded_owner(
+    client: httpx.AsyncClient,
+) -> None:
+    creator_payload = _account_payload(email="owner-creator@example.com")
+    await client.post("/auth/register", json=creator_payload)
+    creator_login = await client.post("/auth/login", json=creator_payload)
+    creator_token = creator_login.json()["access_token"]
+
+    owner_response = await client.post(
+        "/owners",
+        json=_owner_payload(),
+        headers={"Authorization": f"Bearer {creator_token}"},
+    )
+    assert owner_response.status_code == 201
+    owner_id = owner_response.json()["id"]
+
+    linked_payload = _account_payload(email="linked-account@example.com")
+    register_response = await client.post(
+        "/auth/register", json={**linked_payload, "owner_id": owner_id}
+    )
+    assert register_response.status_code == 201
+    login_response = await client.post("/auth/login", json=linked_payload)
+    access_token = login_response.json()["access_token"]
+
+    response = await client.get(
+        "/auth/me", headers={"Authorization": f"Bearer {access_token}"}
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["owner"] == {
+        "id": owner_id,
+        "nif": "12345678Z",
+        "full_name": "Jane Doe",
+        "email": "owner@example.com",
+        "phone": "+34600111222",
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_me_without_auth_header_returns_401(
+    client: httpx.AsyncClient,
+) -> None:
+    response = await client.get("/auth/me")
+
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_get_me_with_malformed_token_returns_401_with_expected_body(
+    client: httpx.AsyncClient,
+) -> None:
+    await client.post("/auth/register", json=_account_payload())
+    login_response = await client.post("/auth/login", json=_account_payload())
+    access_token = login_response.json()["access_token"]
+    header_and_payload, _, _ = access_token.rpartition(".")
+    tampered_token = f"{header_and_payload}.tampered-signature"
+
+    response = await client.get(
+        "/auth/me", headers={"Authorization": f"Bearer {tampered_token}"}
+    )
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": "Invalid or expired token"}
