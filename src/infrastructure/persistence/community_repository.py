@@ -52,6 +52,21 @@ class PostgresCommunityRepository(CommunityRepository):
         result = await self._session.execute(stmt)
         return bool(result.scalar())
 
+    async def find_by_owner_id(self, owner_id: OwnerId) -> tuple[Community, ...]:
+        matching_community_ids = (
+            select(UnitModel.community_id)
+            .where(UnitModel.owner_ids.any(owner_id.value))
+            .distinct()
+        )
+        stmt = (
+            select(CommunityModel)
+            .where(CommunityModel.id.in_(matching_community_ids))
+            .options(selectinload(CommunityModel.units))
+        )
+        result = await self._session.execute(stmt)
+        models = result.scalars().all()
+        return tuple(self._to_domain(model) for model in models)
+
     async def _upsert_community(self, community: Community) -> None:
         expected_version = community.version
         new_version = expected_version + 1

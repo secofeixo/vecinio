@@ -339,6 +339,76 @@ project patterns — noted here so they're not mistaken for oversights:
   "header missing entirely" case — which is actually rejected upstream by
   `OAuth2PasswordBearer` before `get_current_account`'s own logic ever runs.
 
+## `owner` HTTP interface — `GET /owners/me/units`
+First **list** endpoint in the project (everything before this was
+single-resource creation or get-by-id). Built directly against the
+`GET /auth/me` precedent above, but with real differences worth recording so
+they're not mistaken for inconsistency:
+
+- **No cross-aggregate query capability existed for this before.**
+  `CommunityRepository` only had `save`/`get_by_id`/`exists_by_cif` — `Unit`
+  lives embedded inside `Community`, in its own relational `units` table
+  with an `owner_ids UUID[]` array column, but no repository method ever
+  queried it. New abstract method `find_by_owner_id(owner_id: OwnerId) ->
+  tuple[Community, ...]` on `CommunityRepository`
+  (`src/domain/community/repository.py`), implemented in
+  `PostgresCommunityRepository`
+  (`src/infrastructure/persistence/community_repository.py`) via
+  `UnitModel.owner_ids.any(owner_id.value)` (Postgres `ANY()`), reusing the
+  exact `selectinload(CommunityModel.units)` eager-load pattern from
+  `get_by_id`. **Deliberately returns full `Community` aggregates** —
+  including units NOT owned by the queried owner — the router filters down
+  to "my units" afterward. Chosen over a leaner SQL projection specifically
+  to keep the project's "repositories always return whole aggregates"
+  convention intact; a projection would have been the first case breaking
+  it.
+- **No GIN index added on `units.owner_ids`.** Same accepted-trade-off
+  pattern as `Quota`'s ordinary-overlap check (see below): a GIN index would
+  be the correct fix if write/read volume ever grows enough for the
+  sequential scan to matter — not needed at today's scale, not added
+  speculatively.
+- **`account.owner_id → Owner` resolution is NOT reused from `GET /auth/me`,
+  and NOT extracted into a shared dependency** — considered and explicitly
+  rejected. `GET /auth/me` treats `owner_id is None` as a valid state
+  (returns `owner: null`, 200); this endpoint must reject it (404) — same
+  underlying check, different failure semantics, so a shared
+  `get_current_owner` dependency would have needed either two variants or a
+  refactor of `auth.py`'s already-tested `get_me`, neither judged worth it
+  for two call sites. **This endpoint also never loads the `Owner` aggregate
+  at all** — unlike `GET /auth/me` (which embeds `nif`/`full_name`/`email`/
+  `phone` and therefore must fetch `Owner`), `GET /owners/me/units` only
+  needs the `OwnerId` value itself to pass into `find_by_owner_id`, so no
+  `OwnerRepository` call happens here — the FK (`accounts.owner_id →
+  owners.id ON DELETE SET NULL`) already guarantees a non-null `owner_id`
+  points at a real row, so no read-then-verify step is needed.
+- **New exception `OwnerNotLinkedToAccountError`, defined directly in
+  `src/interfaces/api/routers/owners.py`**, not in `domain/identity/` —
+  deliberate: `account.owner_id is None` is a valid `Account` state, not an
+  aggregate invariant violation, so it doesn't belong in the domain layer.
+  Registered in `exception_handlers.py` → `_handle_not_found` (404), fixed
+  body `{"detail": "No owner is linked to this account"}`. First
+  domain-shaped exception in the project defined inside a router file
+  rather than an application-layer use case module — a direct consequence
+  of this being a read with no use case class (same "no read-only use case
+  classes" precedent as `GET /auth/me`).
+- **First list endpoint in the project** — `response_model=
+  list[OwnerUnitResponse]`, a bare JSON array, no wrapping object, no
+  pagination (not needed at the volume a single Owner's units represent).
+  `OwnerUnitResponse` (`src/interfaces/api/schemas/owner_schemas.py`)
+  embeds `community_id`/`community_name`/`community_address` (importing
+  `AddressResponse` from `community_schemas.py` — second cross-schema
+  import in the project, same pattern as `AccountMeResponse.owner:
+  OwnerResponse`) rather than just `community_id`, since no
+  community-listing endpoint exists yet and the frontend would otherwise
+  need one extra round-trip per distinct `Community` to render a readable
+  "my units" screen.
+- Route declared as `GET /owners/me/units`, positioned in `owners.py`
+  **before** any future `GET /owners/{owner_id}` — no conflict today
+  (`owners.py` only had `POST ""` before this), but FastAPI matches path
+  operations in declaration order, so `/{owner_id}` would swallow `/me` if
+  declared first; flagged with an inline comment in the router for whoever
+  adds that route later.
+
 ## Business invariants already decided (do not reopen without explicit confirmation)
 - `Owner` is an independent aggregate (own identity, can belong to 0..N communities).
 - `Unit` is an entity INSIDE the `Community` aggregate (not its own aggregate),
@@ -653,11 +723,20 @@ point:
   its shape. The frontend does not call it from anywhere yet — wiring it
   into the Pinia auth store (e.g. on app boot, replacing client-side JWT
   decoding for "who am I") is still pending.
-- **No community/owner/vote list endpoints exist yet** — only
+- **`GET /owners/me/units` now exists** — the first list endpoint in the
+  project, returns every Unit (across all Communities) owned by the current
+  Account's linked Owner, each embedding its Community's id/name/address.
+  See the "`owner` HTTP interface" section above for the design decisions
+  behind its shape. The frontend does not call it from anywhere yet — no
+  "my units"/"my communities" screen has been built.
+- **No community/vote list endpoints exist yet** — only
   `GET /communities/{id}` and `GET /communities/{id}/quotas/{id}` (by id).
-  There is no "browse all my communities" screen possible yet; a created
+  There is still no "browse all my communities" screen possible; a created
   Community is only reachable by navigating straight to its detail route
-  right after creation.
+  right after creation, or indirectly via `GET /owners/me/units`'s embedded
+  `community_id`/`community_name`/`community_address` (which is not the
+  same as a real community-detail fetch — no `units` list comes back from
+  that endpoint's embedded community data).
 - **Units can only be created inline as part of `POST /communities`** — no
   standalone "add a unit to an existing community" endpoint exists (see
   "Bounded contexts implemented so far" above). This is why the first

@@ -300,3 +300,91 @@ async def test_concurrent_save_raises_concurrent_modification_error(
     fetched = await setup_repository.get_by_id(community.id)
     assert fetched is not None
     assert fetched.units[0].owner_ids == (owner_a,)
+
+
+@pytest.mark.asyncio
+async def test_find_by_owner_id_returns_only_communities_with_a_matching_unit(
+    session: AsyncSession,
+) -> None:
+    target_owner, other_owner = OwnerId.generate(), OwnerId.generate()
+    community_with_owner = make_community(
+        cif="H12345674", units=(make_unit("1", owner_ids=(target_owner,)),)
+    )
+    community_without_owner = make_community(
+        cif="A58818501", units=(make_unit("1", owner_ids=(other_owner,)),)
+    )
+    repository = PostgresCommunityRepository(session)
+    await repository.save(community_with_owner)
+    await repository.save(community_without_owner)
+    await session.commit()
+
+    found = await repository.find_by_owner_id(target_owner)
+
+    assert [community.id for community in found] == [community_with_owner.id]
+
+
+@pytest.mark.asyncio
+async def test_find_by_owner_id_returns_full_community_including_units_not_owned_by_target(
+    session: AsyncSession,
+) -> None:
+    target_owner, other_owner = OwnerId.generate(), OwnerId.generate()
+    own_unit = make_unit("0.5", owner_ids=(target_owner,))
+    other_unit = make_unit("0.5", owner_ids=(other_owner,))
+    community = make_community(units=(own_unit, other_unit))
+    repository = PostgresCommunityRepository(session)
+    await repository.save(community)
+    await session.commit()
+
+    found = await repository.find_by_owner_id(target_owner)
+
+    assert len(found) == 1
+    assert {unit.id for unit in found[0].units} == {own_unit.id, other_unit.id}
+
+
+@pytest.mark.asyncio
+async def test_find_by_owner_id_returns_empty_tuple_when_owner_has_no_units(
+    session: AsyncSession,
+) -> None:
+    repository = PostgresCommunityRepository(session)
+    await repository.save(make_community(units=(make_unit("1"),)))
+    await session.commit()
+
+    found = await repository.find_by_owner_id(OwnerId.generate())
+
+    assert found == ()
+
+
+@pytest.mark.asyncio
+async def test_find_by_owner_id_does_not_duplicate_community_with_multiple_owned_units(
+    session: AsyncSession,
+) -> None:
+    target_owner = OwnerId.generate()
+    units = (
+        make_unit("0.5", owner_ids=(target_owner,)),
+        make_unit("0.5", owner_ids=(target_owner,)),
+    )
+    community = make_community(units=units)
+    repository = PostgresCommunityRepository(session)
+    await repository.save(community)
+    await session.commit()
+
+    found = await repository.find_by_owner_id(target_owner)
+
+    assert len(found) == 1
+
+
+@pytest.mark.asyncio
+async def test_find_by_owner_id_matches_a_co_owned_unit(
+    session: AsyncSession,
+) -> None:
+    target_owner, co_owner = OwnerId.generate(), OwnerId.generate()
+    community = make_community(
+        units=(make_unit("1", owner_ids=(target_owner, co_owner)),)
+    )
+    repository = PostgresCommunityRepository(session)
+    await repository.save(community)
+    await session.commit()
+
+    found = await repository.find_by_owner_id(target_owner)
+
+    assert [fetched.id for fetched in found] == [community.id]

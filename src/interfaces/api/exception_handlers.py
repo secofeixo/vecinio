@@ -121,6 +121,7 @@ from src.domain.vote.vote import (
     VoteAlreadyClosedError,
     VoteEndDateNotInFutureError,
 )
+from src.interfaces.api.routers.owners import OwnerNotLinkedToAccountError
 
 logger = logging.getLogger(__name__)
 
@@ -251,6 +252,7 @@ def register_exception_handlers(app: FastAPI) -> None:
     app.add_exception_handler(CommunityGroupCommunityNotMemberError, _handle_not_found)
     app.add_exception_handler(CreateQuotaCommunityNotFoundError, _handle_not_found)
     app.add_exception_handler(QuotaNotFoundError, _handle_not_found)
+    app.add_exception_handler(OwnerNotLinkedToAccountError, _handle_not_found)
 
     app.add_exception_handler(DuplicateCifError, _handle_conflict)
     app.add_exception_handler(DuplicateNifError, _handle_conflict)

@@ -207,19 +207,6 @@ deliberadamente:
   posible de un `Vote` es `close()`).
 
 ## Próximos pasos posibles (sin decidir orden)
-- Endpoint `GET /owners/me/units` (o similar) para que un `Owner` autenticado
-  vea sus viviendas — confirmado que falta (verificado en código durante el
-  trabajo de `GET /auth/me`, no solo asumido): NO existe ningún método de
-  repositorio para esto hoy. `Unit` vive embebido dentro del agregado
-  `Community` (no es su propio agregado/tabla independiente) y
-  `CommunityRepository` solo expone `save`/`get_by_id`/`exists_by_cif` — sin
-  `get_by_owner_id` ni nada parecido. La única forma actual de encontrar las
-  unidades de un `Owner` es cargar una `Community` conocida por id y filtrar
-  `units` en cliente. Construir este endpoint requiere decidir primero CÓMO
-  resolver "todas las Units de todas las Communities donde aparezca este
-  owner_id" — un nuevo método de query en `CommunityRepository` que escanee
-  `units` (ineficiente si crece el nº de comunidades) vs. un read model
-  denormalizado — decisión de diseño abierta, no tomada todavía.
 - Invariante de presidencia en `CommunityGroup` (mancomunidades) — bloqueada
   por `governance`.
 - `governance` (roles) — ahora con más superficie real esperándole: la

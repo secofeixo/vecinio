@@ -3,6 +3,7 @@ from __future__ import annotations
 from src.domain.community.community import Community
 from src.domain.community.repository import CommunityRepository
 from src.domain.community.value_objects import CIF, CommunityId
+from src.domain.owner.value_objects import OwnerId
 
 
 class InMemoryCommunityRepository(CommunityRepository):
@@ -17,6 +18,13 @@ class InMemoryCommunityRepository(CommunityRepository):
 
     async def exists_by_cif(self, cif: CIF) -> bool:
         return any(community.cif == cif for community in self._communities.values())
+
+    async def find_by_owner_id(self, owner_id: OwnerId) -> tuple[Community, ...]:
+        return tuple(
+            community
+            for community in self._communities.values()
+            if any(owner_id in unit.owner_ids for unit in community.units)
+        )
 
     def all(self) -> tuple[Community, ...]:
         return tuple(self._communities.values())
