@@ -723,12 +723,65 @@ point:
   its shape. The frontend does not call it from anywhere yet — wiring it
   into the Pinia auth store (e.g. on app boot, replacing client-side JWT
   decoding for "who am I") is still pending.
-- **`GET /owners/me/units` now exists** — the first list endpoint in the
-  project, returns every Unit (across all Communities) owned by the current
-  Account's linked Owner, each embedding its Community's id/name/address.
-  See the "`owner` HTTP interface" section above for the design decisions
-  behind its shape. The frontend does not call it from anywhere yet — no
-  "my units"/"my communities" screen has been built.
+- **`GET /owners/me/units` now exists and is consumed** — the first list
+  endpoint in the project. See the "`owner` HTTP interface" section above
+  for the design decisions behind its shape. Consumed by the new "Mis
+  viviendas" screen (`frontend/src/views/MyUnitsView.vue`,
+  `frontend/src/api/owners.js`) — see the dedicated bullet below for the
+  frontend-side decisions made building it.
+- **"Mis viviendas" (`MyUnitsView.vue`) is now the landing screen** — `/`
+  and the post-login redirect (`LoginView.vue`) both point at
+  `{ name: 'my-units' }` instead of `/communities/new`. This is the first
+  time `App.vue`'s `v-app-bar` has any navigation links at all (previously
+  just a title and a logout button); it now also has "Mis viviendas" and
+  "Nueva comunidad" (`community-create`), both `v-btn :to="{...}"`, visible
+  under the same `v-if="auth.isAuthenticated"` the bar already had — no new
+  conditional needed. Community creation is unaffected functionally, only
+  reachable via nav instead of being the default route.
+  - **Client-side grouping**: `GET /owners/me/units` returns a flat array
+    with `community_name`/`community_address` repeated per unit. The view
+    groups it by `community_id` (first-seen order preserved) via a
+    standalone pure function, `frontend/src/utils/groupUnitsByCommunity.js`
+    — extracted rather than inlined as a `computed` (unlike every other
+    view so far) specifically so grouping edge cases could be unit-tested
+    without mounting Vuetify. This is the one deliberate deviation from the
+    project's "inline everything, no premature extraction" convention; not
+    a general precedent for extracting logic out of other views.
+  - **Two distinct empty/error states, not merged into one**: a 200 with
+    `[]` (the linked Owner exists but owns no Units — plain `v-alert
+    type="info"`, no call to action) is visually and semantically different
+    from a 404 (`OwnerNotLinkedToAccountError` — the Account itself has no
+    `owner_id`, see the "`owner` HTTP interface" section above). The 404
+    case shows the same informational alert style plus a **disabled**
+    `v-btn` ("Vincular propietario"), marked with an inline `<!-- TODO -->`
+    comment noting it's a placeholder — no owner-linking/onboarding screen
+    exists yet to point it at (registration accepts an optional `owner_id`
+    in the body, `POST /auth/register`, but there is no self-service way
+    for an already-registered Account to acquire one after the fact). The
+    404 is detected by checking `error.response?.status === 404` in the
+    view directly, NOT routed through the shared `apiErrorMessage(error)`
+    helper — that helper is still used for every other (genuinely
+    unexpected) error, but a 404 here is an expected domain state that
+    needs its own UI, not a string dumped into a generic red alert.
+- **First frontend test infrastructure**: Vitest + `@vue/test-utils` +
+  `jsdom`, added as part of the "Mis viviendas" work
+  (`npm run test:unit`). Scope deliberately limited to the new work — no
+  retrofitted tests for `CommunityCreateView`/`CommunityDetailView`/
+  `LoginView`/the auth store. `frontend/src/test/setup.js` stubs
+  `window.matchMedia`/`ResizeObserver` (jsdom provides neither; Vuetify's
+  layout internals touch both even for basic components).
+  `frontend/src/test/mountWithVuetify.js` wraps `@vue/test-utils`'s `mount`
+  with a fresh `createVuetify()` instance per call. **Required a non-obvious
+  Vitest config addition**: `vite.config.js`'s `test.server.deps.inline:
+  ['vuetify']` — without it, mounting any Vuetify-wrapped component under
+  Vitest's default SSR module resolution throws `TypeError: Unknown file
+  extension ".css"` on Vuetify's per-component autoImport CSS files: a
+  known Vitest + `vite-plugin-vuetify` interaction, not specific to this
+  view. `vite.config.js` itself now imports `defineConfig` from
+  `vitest/config` (a superset of Vite's own) rather than `vite`, to avoid a
+  second config file duplicating the `@` alias and plugin list. No frontend
+  CI job exists yet to run this (`.github/workflows/ci.yml` only runs the
+  backend jobs) — accepted gap, natural follow-up, not part of this work.
 - **No community/vote list endpoints exist yet** — only
   `GET /communities/{id}` and `GET /communities/{id}/quotas/{id}` (by id).
   There is still no "browse all my communities" screen possible; a created

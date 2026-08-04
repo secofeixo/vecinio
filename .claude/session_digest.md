@@ -228,13 +228,36 @@ deliberadamente:
   automático de aprobación en `vote` más adelante.
 - Votaciones públicas (no secretas) configurables, si se retoma esa idea.
 - Bounded contexts de negocio nuevos: incidencias.
-- **Frontend Vue — primera parte ya construida** (Vite + Pinia + vue-router +
+- **Frontend Vue — construcción en progreso** (Vite + Pinia + vue-router +
   Vuetify 4 + axios; ver `CLAUDE.md`, sección "Frontend", para el stack y las
-  decisiones técnicas): registro, login, y alta de `Community` con sus
-  `Unit`s en un único formulario. De camino se corrigieron dos huecos del
-  backend que bloqueaban esto: CORS no estaba configurado en ningún sitio, y
+  decisiones técnicas). Construido hasta ahora: registro, login, alta de
+  `Community` con sus `Unit`s en un único formulario, y (sesión posterior)
+  la pantalla **"Mis viviendas"** (`MyUnitsView.vue`, consumiendo
+  `GET /owners/me/units`) — ahora la landing del usuario logueado, con
+  agrupación por comunidad, estados distintos para "sin propietario
+  vinculado" (404) vs. "propietario sin viviendas" (200 `[]`), navegación
+  añadida a `App.vue` por primera vez, y **Vitest + `@vue/test-utils`** como
+  primera infraestructura de test del frontend (9 tests, alcance limitado a
+  esta pantalla — sin retrofit de las vistas anteriores). De camino a la
+  primera parte se corrigieron dos huecos del backend que la bloqueaban:
+  CORS no estaba configurado en ningún sitio, y
   `ParticipationCoefficientSumError` no tenía handler registrado (devolvía
   500 en vez de 400). Pendiente, sin construir todavía: pantallas de alta de
   `Owner` y asignación a `Unit`, de `quota` y de `vote`; no hay pantalla de
-  "mis comunidades" posible porque no existe ningún endpoint de listado
-  (`GET /communities`), solo `GET /communities/{id}`.
+  "mis comunidades" (listado completo, no solo las que tienen unidades
+  propias) posible porque no existe ningún endpoint de listado
+  (`GET /communities`), solo `GET /communities/{id}`. No hay job de CI para
+  el frontend todavía (`.github/workflows/ci.yml` solo corre los jobs de
+  backend).
+- **Vinculación de un `Owner` a una `Account` ya registrada — sin diseñar**:
+  surgió al construir "Mis viviendas". Hoy `Account.owner_id` solo se fija
+  en `POST /auth/register` (campo opcional `owner_id` en el body); no existe
+  ningún endpoint ni pantalla para que una `Account` ya registrada se
+  vincule a un `Owner` después del hecho. La pantalla "Mis viviendas"
+  muestra un botón "Vincular propietario" deliberadamente **deshabilitado**
+  para este caso (ver `CLAUDE.md`, sección "Frontend") como placeholder,
+  pero el flujo real (¿autoservicio con un formulario tipo alta de `Owner` +
+  vínculo automático a la `Account` actual? ¿invitación desde un
+  `Owner`/co-propietario ya existente? ¿verificación de identidad de por
+  medio, dado que un NIF es un dato sensible?) no se ha discutido ni
+  decidido todavía.

@@ -8,6 +8,8 @@ const auth = useAuthStore()
 <template>
   <v-app>
     <v-app-bar v-if="auth.isAuthenticated" title="Vecinio" density="comfortable">
+      <v-btn variant="text" :to="{ name: 'my-units' }">Mis viviendas</v-btn>
+      <v-btn variant="text" :to="{ name: 'community-create' }">Nueva comunidad</v-btn>
       <v-spacer />
       <v-btn variant="text" @click="auth.logout()">Cerrar sesión</v-btn>
     </v-app-bar>

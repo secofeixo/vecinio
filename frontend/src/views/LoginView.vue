@@ -19,7 +19,7 @@ async function onSubmit() {
   submitting.value = true
   try {
     await auth.login({ email: email.value, password: password.value })
-    router.push({ name: 'community-create' })
+    router.push({ name: 'my-units' })
   } catch (error) {
     errorMessage.value = apiErrorMessage(error)
   } finally {

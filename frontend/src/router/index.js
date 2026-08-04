@@ -4,11 +4,12 @@ import LoginView from '@/views/LoginView.vue'
 import RegisterView from '@/views/RegisterView.vue'
 import CommunityCreateView from '@/views/CommunityCreateView.vue'
 import CommunityDetailView from '@/views/CommunityDetailView.vue'
+import MyUnitsView from '@/views/MyUnitsView.vue'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
-    { path: '/', redirect: '/communities/new' },
+    { path: '/', redirect: '/my-units' },
     { path: '/login', name: 'login', component: LoginView, meta: { public: true } },
     { path: '/register', name: 'register', component: RegisterView, meta: { public: true } },
     { path: '/communities/new', name: 'community-create', component: CommunityCreateView },
@@ -18,6 +19,7 @@ const router = createRouter({
       component: CommunityDetailView,
       props: true,
     },
+    { path: '/my-units', name: 'my-units', component: MyUnitsView },
   ],
 })
 
