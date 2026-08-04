@@ -1,6 +1,24 @@
 # frontend
 
-This template should help get you started developing with Vue 3 in Vite.
+Vecinio's web client: Vue 3 (Composition API) + Vuetify + Pinia, scaffolded
+with `create-vue` and built with Vite.
+
+## Prerequisites
+
+- **Node.js** `^22.18.0` or `>=24.12.0` (see `engines` in `package.json`).
+  Install via [nvm](https://github.com/nvm-sh/nvm) or your OS package manager.
+- **npm** (bundled with Node.js).
+- The **backend API** running locally, since the frontend calls it for
+  everything (auth, communities, quotas, votes). From the repository root:
+  ```sh
+  docker compose up -d db
+  uv run alembic upgrade head
+  DATABASE_URL=postgresql+psycopg://vecinio:vecinio@localhost:5433/vecinio \ # pragma: allowlist secret
+  JWT_SECRET_KEY=<any-dev-secret> \
+    uv run uvicorn src.interfaces.api.main:app --reload
+  ```
+  See the root `CLAUDE.md` for details. The dev server expects the API to be
+  reachable at the URL configured in `src/api/client.js`.
 
 ## Recommended IDE Setup
 
@@ -19,26 +37,72 @@ This template should help get you started developing with Vue 3 in Vite.
 
 See [Vite Configuration Reference](https://vite.dev/config/).
 
-## Project Setup
+## Install dependencies
+
+From the `frontend/` directory:
 
 ```sh
 npm install
 ```
 
-### Compile and Hot-Reload for Development
+## Run the dev server
 
 ```sh
 npm run dev
 ```
 
-### Compile and Minify for Production
+Serves the app with hot-reload at `http://localhost:5173` by default.
+Requires the backend API (and its Postgres database) to be running — see
+"Prerequisites" above.
+
+## Stop the dev server
+
+Press `Ctrl+C` in the terminal where `npm run dev` is running. If it was
+started in the background, stop it with your shell's job control (`kill
+%<job-id>`) or by killing the `vite` process (e.g. `pkill -f vite`).
+
+Don't forget to also stop the local database container when you're done with
+manual work, from the repository root:
+
+```sh
+docker compose down
+```
+
+## Run tests
+
+Unit tests use Vitest + `@vue/test-utils` + jsdom:
+
+```sh
+npm run test:unit
+```
+
+## Build for production
 
 ```sh
 npm run build
 ```
 
-### Lint with [ESLint](https://eslint.org/)
+Compiles and minifies into `dist/`.
+
+## Preview a production build
+
+```sh
+npm run preview
+```
+
+Serves the built `dist/` output locally, for a final check before deploying.
+
+## Lint and format
 
 ```sh
 npm run lint
 ```
+
+Runs [oxlint](https://oxc.rs/docs/guide/usage/linter.html) and
+[ESLint](https://eslint.org/) (both with `--fix`).
+
+```sh
+npm run format
+```
+
+Formats `src/` with [Prettier](https://prettier.io/).

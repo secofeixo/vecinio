@@ -17,7 +17,8 @@ decision) on top of async **FastAPI** and **PostgreSQL**.
 - **Auth**: short-lived JWT access tokens + opaque refresh tokens
   (revocable, hashed at rest). Password hashing with `pwdlib`
   (argon2id).
-- **Frontend**: Vue 3 + Pinia — not started yet.
+- **Frontend**: Vue 3 + Pinia. See [`frontend/README.md`](frontend/README.md)
+  for setup and commands.
 
 ## Getting started
 
