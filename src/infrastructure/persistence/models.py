@@ -85,7 +85,10 @@ class OwnerModel(Base):
 
 class AccountModel(Base):
     __tablename__ = "accounts"
-    __table_args__ = (UniqueConstraint("email", name="uq_accounts_email"),)
+    __table_args__ = (
+        UniqueConstraint("email", name="uq_accounts_email"),
+        UniqueConstraint("owner_id", name="uq_accounts_owner_id"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
     email: Mapped[str] = mapped_column(String, nullable=False)

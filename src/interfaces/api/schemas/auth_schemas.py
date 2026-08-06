@@ -45,3 +45,7 @@ class AccountMeResponse(BaseModel):
     id: UUID
     email: str
     owner: OwnerResponse | None = None
+
+
+class LinkOwnerRequest(BaseModel):
+    nif: str

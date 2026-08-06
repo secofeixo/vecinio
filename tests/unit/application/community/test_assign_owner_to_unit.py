@@ -84,6 +84,9 @@ class SpyOwnerRepository(OwnerRepository):
     async def get_by_id(self, owner_id: OwnerId) -> Owner | None:
         return await self._wrapped.get_by_id(owner_id)
 
+    async def get_by_nif(self, nif: NIF) -> Owner | None:
+        return await self._wrapped.get_by_nif(nif)
+
     async def exists_by_nif(self, nif: NIF) -> bool:
         return await self._wrapped.exists_by_nif(nif)
 

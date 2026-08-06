@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
+from src.domain.owner.value_objects import OwnerId
+
 from .account import Account
 from .refresh_token import RefreshToken
 from .value_objects import AccountId, Email, RefreshTokenId
@@ -16,6 +18,9 @@ class AccountRepository(ABC):
 
     @abstractmethod
     async def get_by_email(self, email: Email) -> Account | None: ...
+
+    @abstractmethod
+    async def exists_by_owner_id(self, owner_id: OwnerId) -> bool: ...
 
 
 class RefreshTokenRepository(ABC):

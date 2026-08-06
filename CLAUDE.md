@@ -339,6 +339,101 @@ project patterns — noted here so they're not mistaken for oversights:
   "header missing entirely" case — which is actually rejected upstream by
   `OAuth2PasswordBearer` before `get_current_account`'s own logic ever runs.
 
+## `identity` HTTP interface — `POST /auth/me/link-owner`
+Self-service linking for an already-registered `Account` to an existing
+`Owner`, filling the gap `Account.owner_id` previously only being settable at
+`POST /auth/register` time (see `session_digest.md` history — this was
+flagged there as "sin diseñar" before this endpoint existed). Several
+deliberate product/security decisions were made building it, discussed and
+confirmed explicitly before implementation — recorded here so they aren't
+mistaken for the "obvious" design:
+
+- **NIF-only self-service, no identity verification** — the caller supplies
+  a NIF/NIE; if an unclaimed `Owner` with that NIF exists, the `Account` is
+  linked immediately. No email confirmation, no invitation token, nothing
+  checking the caller is actually that person. **Deliberately accepted
+  trade-off, not an oversight**: a NIF is a real, non-secret government
+  identifier (visible on deeds, mailboxes, community boards), so this is a
+  land-grab — whoever enters a given NIF first claims that `Owner` identity.
+  Revisit once a `governance`/invitation-based flow exists (see
+  `session_digest.md`); do not silently harden this endpoint (e.g. by adding
+  email matching) without discussing the approach first, since a partial fix
+  (checking `Owner.email == Account.email`) has its own failure mode (the two
+  emails are independently set today and aren't guaranteed to match for a
+  legitimate owner).
+- **Links to an existing `Owner` only — never creates one.** If the NIF
+  isn't found, the response tells the user to contact whoever manages their
+  community. `POST /owners` remains the only way to create an `Owner`;
+  bundling owner-creation into this self-service flow was considered and
+  explicitly rejected (it would double this endpoint's scope and reintroduce
+  the same "is self-registering a legal identity safe without verification"
+  question for the create path too).
+- **Real gap found and closed while building this**: `accounts.owner_id` had
+  **no uniqueness enforcement anywhere** — not at the DB level, not at the
+  application level — since the `identity` bounded context was first built.
+  Nothing stopped two different `Account`s from linking to the same `Owner`.
+  Closed with a genuine DB-level `UNIQUE` constraint (`uq_accounts_owner_id`,
+  see `## Business invariants` below), not just an app-level check — treated
+  as a security-relevant invariant (prevents an account-hijack race), the
+  same class of decision as the `Ballot` partial-unique-index precedent, not
+  the `Quota`-overlap accepted-race-window one.
+- **`Account.link_owner(owner_id)` — the aggregate's first behavior
+  method.** Until this work, `Account` was a plain pydantic model with zero
+  methods (`owner_id` was only ever set via the constructor at `RegisterAccount`
+  time). `link_owner()` guards against double-linking
+  (`AccountAlreadyHasOwnerError`, a self-contained invariant — no other
+  aggregate needs consulting to know whether *this* `Account` already has an
+  owner) and is called from `LinkOwnerToAccount.execute()`.
+- **Check order** (tested explicitly, same "check-order is a tested
+  contract" discipline established in `vote`): account exists (401,
+  defense-in-depth, mirrors `CreateVote`/`CastBallot`/`CloseVote`'s own
+  local `AccountNotFoundError` copies — `get_current_account` already
+  rejects a stale JWT before the use case runs) → account does not already
+  have a linked owner (409 — checked in `LinkOwnerToAccount.execute()`
+  itself, before any NIF lookup, **and again** inside `Account.link_owner()`
+  as the aggregate's own guard — deliberate duplication, identical pattern
+  to `CloseVote`/`Vote.close()` and `VoteAlreadyClosedError`) → NIF resolves
+  to an `Owner` → that `Owner` isn't already linked to a different `Account`.
+- **NIF-enumeration protection — deliberately stricter than the `vote` HTTP
+  conventions' precedent.** "NIF not found" and "NIF found but already
+  linked to someone else" return a **byte-identical** 409 body (one shared
+  handler, fixed message, ignoring `str(exc)` — same mechanics as
+  `_handle_cast_ballot_not_authorized`). The `vote` conventions unified
+  messages specifically when an identifier was exposed in a URL (`community_id`)
+  and left body-only identifiers like `unit_id` differentiated. This
+  endpoint unifies a **body-only** identifier anyway, because a NIF's
+  sensitivity comes from being a real government ID tied to a specific
+  human, not from where it appears in the request — a stronger enumeration
+  risk than an opaque `unit_id`/`community_id`, so the letter of the `vote`
+  precedent (URL vs. body) doesn't apply here; the underlying principle
+  (don't let a caller learn about a sensitive identifier's existence) does.
+  The same shared handler also covers the domain-level `OwnerAlreadyLinkedError`
+  raised by `PostgresAccountRepository.save()` on the rare DB-race path
+  (two concurrent link requests for the same still-unclaimed NIF) — from the
+  caller's point of view that race is indistinguishable from the ordinary
+  already-linked case, so it gets the same response.
+- **`RegisterAccount` retrofitted with the same "Owner already linked"
+  check** (`exists_by_owner_id`), since it's the *other* entry point that
+  sets `Account.owner_id` and had the identical gap. **Deliberately NOT
+  unified** with the NIF-enumeration-safe message above: `owner_id` here is
+  an opaque UUID supplied in the request body, not a NIF — same reasoning
+  the `vote` conventions used to treat `unit_id` as lower-sensitivity than
+  `community_id`. Its own local `OwnerAlreadyLinkedError` (distinct Python
+  class from `LinkOwnerToAccount`'s, same name, aliased on import in
+  `exception_handlers.py` — same pattern already used for
+  `OwnerNotFoundError`/`AccountOwnerNotFoundError`), mapped via the plain
+  `_handle_conflict` (`str(exc)` is fine here).
+- **Response reuses `AccountMeResponse`** — a small `_build_account_me_response(session,
+  account)` helper was extracted in `auth.py`, shared by `GET /auth/me` and
+  this endpoint (the first shared-logic extraction between two routes in
+  that file; previously each route was fully self-contained, per the
+  project's general "no premature extraction" bias, but here the two blocks
+  became byte-identical between two routes in the same file, not a
+  speculative future reuse).
+- Router placement is `/auth/me/link-owner`, not under `/owners` — this
+  mutates `Account`, the same reasoning that already put optional `owner_id`
+  linking inside `/auth/register` rather than `/owners`.
+
 ## `owner` HTTP interface — `GET /owners/me/units`
 First **list** endpoint in the project (everything before this was
 single-resource creation or get-by-id). Built directly against the
@@ -423,6 +518,19 @@ they're not mistaken for inconsistency:
   consistent with the existing duplicate-unit-id check).
 - CIF/NIF/NIE validation follows the real Spanish checksum algorithms (verified
   against official sources during implementation — do not "simplify" these).
+- **`Account.owner_id` ↔ `Owner` is 1:1, enforced at the DB level**
+  (`uq_accounts_owner_id`, a plain `UNIQUE` constraint — NULLs remain
+  unrestricted, only non-null values are enforced unique). Added when
+  building `POST /auth/me/link-owner` (see the `identity` HTTP interface
+  section above) after finding this had **no enforcement at all**, DB or
+  app-level, since `identity` was first built — nothing previously stopped
+  two `Account`s sharing the same `owner_id`. Treated as a security-relevant
+  invariant (prevents an account-hijack race), same reasoning as the
+  `Ballot` partial-unique-index precedent below, not the `Quota`-overlap
+  accepted-race-window one. `PostgresAccountRepository.save()` catches the
+  constraint violation and raises the domain-level `OwnerAlreadyLinkedError`
+  (`domain/identity/account.py`), same `IntegrityError`-translation pattern
+  as every other unique constraint in the project.
 - `CommunityGroup.member_community_ids` requires a minimum of 2 members, no
   duplicates, enforced on every mutation (`add_member`/`remove_member`), not
   just at construction. `slug` is NEVER a settable field — always derived from
@@ -752,17 +860,34 @@ point:
     type="info"`, no call to action) is visually and semantically different
     from a 404 (`OwnerNotLinkedToAccountError` — the Account itself has no
     `owner_id`, see the "`owner` HTTP interface" section above). The 404
-    case shows the same informational alert style plus a **disabled**
-    `v-btn` ("Vincular propietario"), marked with an inline `<!-- TODO -->`
-    comment noting it's a placeholder — no owner-linking/onboarding screen
-    exists yet to point it at (registration accepts an optional `owner_id`
-    in the body, `POST /auth/register`, but there is no self-service way
-    for an already-registered Account to acquire one after the fact). The
-    404 is detected by checking `error.response?.status === 404` in the
-    view directly, NOT routed through the shared `apiErrorMessage(error)`
-    helper — that helper is still used for every other (genuinely
-    unexpected) error, but a 404 here is an expected domain state that
-    needs its own UI, not a string dumped into a generic red alert.
+    case shows the same informational alert style plus a `v-btn` ("Vincular
+    propietario") linking to `{ name: 'link-owner' }` — previously
+    permanently **disabled** with a `<!-- TODO -->` placeholder (no
+    owner-linking screen existed yet); now enabled, see the dedicated
+    "Vincular propietario" bullet below. The 404 is detected by checking
+    `error.response?.status === 404` in the view directly, NOT routed
+    through the shared `apiErrorMessage(error)` helper — that helper is
+    still used for every other (genuinely unexpected) error, but a 404 here
+    is an expected domain state that needs its own UI, not a string dumped
+    into a generic red alert.
+- **"Vincular propietario" (`LinkOwnerView.vue`) — self-service screen
+  consuming `POST /auth/me/link-owner`.** See the "`identity` HTTP
+  interface — `POST /auth/me/link-owner`" section above for the backend
+  design decisions (NIF-only self-service, no identity verification, link-
+  to-existing-`Owner`-only). Reachable exclusively from `MyUnitsView`'s
+  404/no-linked-owner state — deliberately **not** added to `App.vue`'s nav
+  bar, since it's a one-time action only relevant to that specific empty
+  state. Built directly against `CommunityCreateView.vue`'s form
+  conventions (no Vuetify `rules`, `computed canSubmit`, top error `v-alert`,
+  `submitting` ref driving `:loading`). On success, redirects to `{ name:
+  'my-units' }`. New API wrapper `linkOwner({ nif })` added to
+  `frontend/src/api/auth.js`. **`GET /auth/me` is still not wired into the
+  Pinia auth store** — considered and deliberately skipped here too: the
+  only entry point into this screen already only renders for not-yet-linked
+  accounts, so the common path never needs pre-emptive "am I already linked"
+  state; an already-linked account that manually navigates to `/link-owner`
+  correctly gets the backend's 409 on submit instead, treated as an
+  acceptable rough edge for a rare direct-URL case.
 - **First frontend test infrastructure**: Vitest + `@vue/test-utils` +
   `jsdom`, added as part of the "Mis viviendas" work
   (`npm run test:unit`). Scope deliberately limited to the new work — no
@@ -782,6 +907,16 @@ point:
   second config file duplicating the `@` alias and plugin list. No frontend
   CI job exists yet to run this (`.github/workflows/ci.yml` only runs the
   backend jobs) — accepted gap, natural follow-up, not part of this work.
+  **`frontend/src/test/testRouter.js`** (added building `LinkOwnerView`): a
+  minimal `createRouter({ history: createMemoryHistory(), ... })` factory
+  with trivially-stubbed route components, for mounting components that use
+  `useRouter()`/`router.push()`/`:to` bindings in isolation — `MyUnitsView`'s
+  CTA needed this too once it stopped being a static disabled `v-btn` and
+  became a real `:to="{ name: 'link-owner' }"` link (a `v-btn` with `to`
+  silently renders as a bare `<a>` with no `href` if no router is installed
+  in the test, rather than erroring — worth knowing if a future test's
+  button-link assertion mysteriously finds no `href`). Second piece of
+  shared test infrastructure after `mountWithVuetify.js`.
 - **No community/vote list endpoints exist yet** — only
   `GET /communities/{id}` and `GET /communities/{id}/quotas/{id}` (by id).
   There is still no "browse all my communities" screen possible; a created
@@ -829,6 +964,13 @@ discussion.
   without discussing the retry strategy first — the error exists and is
   correctly raised by the repository, but the application-layer handling of
   it (retry once? surface a 409? something else?) hasn't been decided.
+- Do not add identity verification (email confirmation, invitation tokens,
+  etc.) to `POST /auth/me/link-owner`'s NIF-only self-service flow without
+  discussing the approach first — the current land-grab-by-NIF behavior is a
+  deliberate, discussed trade-off (see the `identity` HTTP interface section
+  above), not an oversight; a partial fix like matching `Owner.email` against
+  `Account.email` has its own failure mode since the two are independently
+  set and not guaranteed to match for a legitimate owner.
 
 # Session-digest file
 Read the file .claude/session_digest.md to have more context of the current project.

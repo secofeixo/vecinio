@@ -85,6 +85,28 @@ async def test_save_called_twice_updates_instead_of_duplicating(
 
 
 @pytest.mark.asyncio
+async def test_get_by_nif_finds_the_owner(session: AsyncSession) -> None:
+    owner = make_owner(nif="12345678Z")
+    repository = PostgresOwnerRepository(session)
+
+    await repository.save(owner)
+    await session.commit()
+
+    fetched = await repository.get_by_nif(NIF(value="12345678Z"))
+
+    assert fetched == owner
+
+
+@pytest.mark.asyncio
+async def test_get_by_nif_returns_none_when_not_found(session: AsyncSession) -> None:
+    repository = PostgresOwnerRepository(session)
+
+    fetched = await repository.get_by_nif(NIF(value="87654321X"))
+
+    assert fetched is None
+
+
+@pytest.mark.asyncio
 async def test_exists_by_nif_returns_true_and_false_correctly(
     session: AsyncSession,
 ) -> None:

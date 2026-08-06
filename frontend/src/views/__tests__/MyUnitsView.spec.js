@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises } from '@vue/test-utils'
 import { mountWithVuetify } from '@/test/mountWithVuetify'
+import { createTestRouter } from '@/test/testRouter'
 import MyUnitsView from '@/views/MyUnitsView.vue'
 import { getMyUnits } from '@/api/owners'
 
@@ -77,18 +78,20 @@ describe('MyUnitsView', () => {
     expect(wrapper.find('button').exists()).toBe(false)
   })
 
-  it('shows a dedicated message and a disabled CTA when the account has no linked owner (404)', async () => {
+  it('shows a dedicated message and a CTA linking to /link-owner when the account has no linked owner (404)', async () => {
     const error = new Error('Not Found')
     error.response = { status: 404, data: { detail: 'No owner is linked to this account' } }
     vi.mocked(getMyUnits).mockRejectedValue(error)
+    const router = createTestRouter(['my-units', 'link-owner'])
 
-    const wrapper = mountWithVuetify(MyUnitsView)
+    const wrapper = mountWithVuetify(MyUnitsView, { global: { plugins: [router] } })
     await flushPromises()
 
     expect(wrapper.text()).toContain('Tu cuenta no tiene ningún propietario vinculado todavía.')
-    const button = wrapper.find('button')
-    expect(button.exists()).toBe(true)
-    expect(button.attributes('disabled')).not.toBeUndefined()
+    const cta = wrapper.find('.v-btn')
+    expect(cta.exists()).toBe(true)
+    expect(cta.classes()).not.toContain('v-btn--disabled')
+    expect(cta.attributes('href')).toBe('/link-owner')
   })
 
   it('shows a generic error message for a non-404 failure', async () => {

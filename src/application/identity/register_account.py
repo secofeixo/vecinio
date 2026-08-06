@@ -19,6 +19,10 @@ class OwnerNotFoundError(IdentityDomainError):
     pass
 
 
+class OwnerAlreadyLinkedError(IdentityDomainError):
+    pass
+
+
 class RegisterAccount:
     def __init__(
         self, repository: AccountRepository, owner_repository: OwnerRepository
@@ -44,6 +48,10 @@ class RegisterAccount:
             owner_id_vo = OwnerId(value=owner_id)
             if await self._owner_repository.get_by_id(owner_id_vo) is None:
                 raise OwnerNotFoundError(f"No owner found with id {owner_id}")
+            if await self._repository.exists_by_owner_id(owner_id_vo):
+                raise OwnerAlreadyLinkedError(
+                    f"Owner {owner_id} is already linked to an account"
+                )
 
         account = Account(
             id=AccountId.generate(),

@@ -9,6 +9,7 @@ from src.domain.identity.account import (
     Account,
     ConcurrentModificationError,
     DuplicateEmailError,
+    OwnerAlreadyLinkedError,
 )
 from src.domain.identity.repository import AccountRepository
 from src.domain.identity.value_objects import AccountId, Email
@@ -17,6 +18,7 @@ from src.domain.owner.value_objects import OwnerId
 from .models import AccountModel
 
 _EMAIL_UNIQUE_CONSTRAINT = "uq_accounts_email"
+_OWNER_ID_UNIQUE_CONSTRAINT = "uq_accounts_owner_id"
 
 
 class PostgresAccountRepository(AccountRepository):
@@ -65,6 +67,11 @@ class PostgresAccountRepository(AccountRepository):
                 raise DuplicateEmailError(
                     f"An account with email {account.email.value} already exists"
                 ) from error
+            if self._violates_owner_id_uniqueness(error):
+                raise OwnerAlreadyLinkedError(
+                    f"Owner {account.owner_id.value if account.owner_id else None} "
+                    "is already linked to a different account"
+                ) from error
             raise
 
         if result.first() is None:
@@ -86,10 +93,24 @@ class PostgresAccountRepository(AccountRepository):
         model = result.scalar_one_or_none()
         return self._to_domain(model) if model is not None else None
 
+    async def exists_by_owner_id(self, owner_id: OwnerId) -> bool:
+        stmt = select(
+            select(AccountModel.id)
+            .where(AccountModel.owner_id == owner_id.value)
+            .exists()
+        )
+        result = await self._session.execute(stmt)
+        return bool(result.scalar())
+
     @staticmethod
     def _violates_email_uniqueness(error: IntegrityError) -> bool:
         diag = getattr(error.orig, "diag", None)
         return getattr(diag, "constraint_name", None) == _EMAIL_UNIQUE_CONSTRAINT
+
+    @staticmethod
+    def _violates_owner_id_uniqueness(error: IntegrityError) -> bool:
+        diag = getattr(error.orig, "diag", None)
+        return getattr(diag, "constraint_name", None) == _OWNER_ID_UNIQUE_CONSTRAINT
 
     @staticmethod
     def _to_domain(model: AccountModel) -> Account:

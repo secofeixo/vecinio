@@ -15,6 +15,11 @@ class InMemoryOwnerRepository(OwnerRepository):
     async def get_by_id(self, owner_id: OwnerId) -> Owner | None:
         return self._owners.get(owner_id)
 
+    async def get_by_nif(self, nif: NIF) -> Owner | None:
+        return next(
+            (owner for owner in self._owners.values() if owner.nif == nif), None
+        )
+
     async def exists_by_nif(self, nif: NIF) -> bool:
         return any(owner.nif == nif for owner in self._owners.values())
 

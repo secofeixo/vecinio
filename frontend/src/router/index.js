@@ -5,6 +5,7 @@ import RegisterView from '@/views/RegisterView.vue'
 import CommunityCreateView from '@/views/CommunityCreateView.vue'
 import CommunityDetailView from '@/views/CommunityDetailView.vue'
 import MyUnitsView from '@/views/MyUnitsView.vue'
+import LinkOwnerView from '@/views/LinkOwnerView.vue'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -20,6 +21,7 @@ const router = createRouter({
       props: true,
     },
     { path: '/my-units', name: 'my-units', component: MyUnitsView },
+    { path: '/link-owner', name: 'link-owner', component: LinkOwnerView },
   ],
 })
 

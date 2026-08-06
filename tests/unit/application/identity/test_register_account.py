@@ -1,6 +1,7 @@
 import pytest
 
 from src.application.identity.register_account import (
+    OwnerAlreadyLinkedError,
     OwnerNotFoundError,
     RegisterAccount,
 )
@@ -114,3 +115,23 @@ async def test_execute_raises_owner_not_found_error_and_persists_nothing() -> No
         )
 
     assert repository.all() == ()
+
+
+@pytest.mark.asyncio
+async def test_execute_raises_owner_already_linked_error_and_persists_nothing() -> None:
+    repository = InMemoryAccountRepository()
+    owner_repository = InMemoryOwnerRepository()
+    owner_id = await _persist_owner(owner_repository)
+    use_case = RegisterAccount(repository, owner_repository)
+    await use_case.execute(
+        email="first@example.com", password="s3cret-password", owner_id=owner_id.value
+    )
+
+    with pytest.raises(OwnerAlreadyLinkedError):
+        await use_case.execute(
+            email="second@example.com",
+            password="s3cret-password",
+            owner_id=owner_id.value,
+        )
+
+    assert len(repository.all()) == 1

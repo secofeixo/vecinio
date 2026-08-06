@@ -44,8 +44,7 @@ onMounted(async () => {
         <v-alert type="info" density="compact" class="mb-4">
           Tu cuenta no tiene ningún propietario vinculado todavía.
         </v-alert>
-        <!-- TODO: enable once an owner-linking/onboarding screen exists -->
-        <v-btn disabled color="primary">Vincular propietario</v-btn>
+        <v-btn :to="{ name: 'link-owner' }" color="primary">Vincular propietario</v-btn>
       </div>
 
       <v-alert v-else-if="groups.length === 0" type="info" density="compact">

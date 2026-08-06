@@ -10,6 +10,7 @@ from src.domain.identity.account import (
     Account,
     ConcurrentModificationError,
     DuplicateEmailError,
+    OwnerAlreadyLinkedError,
 )
 from src.domain.identity.value_objects import AccountId, Email
 from src.domain.owner.value_objects import NIF, OwnerId
@@ -104,6 +105,22 @@ async def test_get_by_email_returns_none_when_not_found(session: AsyncSession) -
 
 
 @pytest.mark.asyncio
+async def test_exists_by_owner_id_returns_true_and_false_correctly(
+    session: AsyncSession,
+) -> None:
+    owner_id = OwnerId.generate()
+    await _persist_owner(session, owner_id)
+    account = make_account(owner_id=owner_id)
+    repository = PostgresAccountRepository(session)
+
+    await repository.save(account)
+    await session.commit()
+
+    assert await repository.exists_by_owner_id(owner_id) is True
+    assert await repository.exists_by_owner_id(OwnerId.generate()) is False
+
+
+@pytest.mark.asyncio
 async def test_save_called_twice_updates_instead_of_duplicating(
     session: AsyncSession,
 ) -> None:
@@ -187,6 +204,78 @@ async def test_duplicate_email_violates_unique_constraint_at_db_level(
         )
         await session.commit()
     await session.rollback()
+
+
+@pytest.mark.asyncio
+async def test_duplicate_owner_id_violates_unique_constraint_at_db_level(
+    session: AsyncSession,
+) -> None:
+    owner_id = OwnerId.generate()
+    await _persist_owner(session, owner_id)
+    repository = PostgresAccountRepository(session)
+    await repository.save(make_account(email="first@example.com", owner_id=owner_id))
+    await session.commit()
+
+    with pytest.raises(IntegrityError):
+        await session.execute(
+            AccountModel.__table__.insert().values(
+                id=AccountId.generate().value,
+                email="second@example.com",
+                password_hash="another-hash",
+                owner_id=owner_id.value,
+            )
+        )
+        await session.commit()
+    await session.rollback()
+
+
+@pytest.mark.asyncio
+async def test_save_raises_owner_already_linked_error_instead_of_integrity_error(
+    session: AsyncSession,
+) -> None:
+    # Simulates the land-grab race the app-level exists_by_owner_id
+    # pre-check in LinkOwnerToAccount/RegisterAccount can't prevent: two
+    # concurrent requests racing to link the same still-unclaimed Owner
+    # before either commits. The repository itself must turn the DB-level
+    # unique violation into a domain error, not leak a raw IntegrityError.
+    owner_id = OwnerId.generate()
+    await _persist_owner(session, owner_id)
+    repository = PostgresAccountRepository(session)
+    first = make_account(email="first@example.com", owner_id=owner_id)
+    second = make_account(email="second@example.com", owner_id=owner_id)
+
+    await repository.save(first)
+    await session.commit()
+
+    with pytest.raises(OwnerAlreadyLinkedError):
+        await repository.save(second)
+    await session.rollback()
+
+    count = await session.execute(
+        text("SELECT count(*) FROM accounts WHERE owner_id = :owner_id"),
+        {"owner_id": owner_id.value},
+    )
+    assert count.scalar_one() == 1
+
+
+@pytest.mark.asyncio
+async def test_session_usable_immediately_after_owner_already_linked_error(
+    session: AsyncSession,
+) -> None:
+    owner_id = OwnerId.generate()
+    await _persist_owner(session, owner_id)
+    repository = PostgresAccountRepository(session)
+    first = make_account(email="first@example.com", owner_id=owner_id)
+    second = make_account(email="second@example.com", owner_id=owner_id)
+
+    await repository.save(first)
+    await session.commit()
+
+    with pytest.raises(OwnerAlreadyLinkedError):
+        await repository.save(second)
+
+    result = await session.execute(text("SELECT 1"))
+    assert result.scalar_one() == 1
 
 
 @pytest.mark.asyncio

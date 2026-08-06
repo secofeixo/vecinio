@@ -77,6 +77,12 @@ class PostgresOwnerRepository(OwnerRepository):
         model = result.scalar_one_or_none()
         return self._to_domain(model) if model is not None else None
 
+    async def get_by_nif(self, nif: NIF) -> Owner | None:
+        stmt = select(OwnerModel).where(OwnerModel.nif == nif.value)
+        result = await self._session.execute(stmt)
+        model = result.scalar_one_or_none()
+        return self._to_domain(model) if model is not None else None
+
     async def exists_by_nif(self, nif: NIF) -> bool:
         stmt = select(select(OwnerModel.id).where(OwnerModel.nif == nif.value).exists())
         result = await self._session.execute(stmt)

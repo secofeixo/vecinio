@@ -21,8 +21,20 @@ from src.application.community_group.create_community_group import (
 from src.application.community_group.remove_community_from_group import (
     CommunityGroupNotFoundError as RemoveCommunityGroupNotFoundError,
 )
+from src.application.identity.link_owner_to_account import (
+    AccountNotFoundError as LinkOwnerAccountNotFoundError,
+)
+from src.application.identity.link_owner_to_account import (
+    OwnerAlreadyLinkedError as LinkOwnerOwnerAlreadyLinkedError,
+)
+from src.application.identity.link_owner_to_account import (
+    OwnerNotFoundError as LinkOwnerOwnerNotFoundError,
+)
 from src.application.identity.login import InvalidCredentialsError
 from src.application.identity.refresh_access_token import InvalidRefreshTokenError
+from src.application.identity.register_account import (
+    OwnerAlreadyLinkedError as RegisterAccountOwnerAlreadyLinkedError,
+)
 from src.application.identity.register_account import (
     OwnerNotFoundError as AccountOwnerNotFoundError,
 )
@@ -93,10 +105,14 @@ from src.domain.community_group.community_group import (
     DuplicateCommunityGroupSlugError,
     InvalidCommunityGroupNameError,
 )
+from src.domain.identity.account import AccountAlreadyHasOwnerError
 from src.domain.identity.account import (
     ConcurrentModificationError as AccountConcurrentModificationError,
 )
 from src.domain.identity.account import DuplicateEmailError
+from src.domain.identity.account import (
+    OwnerAlreadyLinkedError as AccountOwnerAlreadyLinkedError,
+)
 from src.domain.owner.owner import (
     ConcurrentModificationError as OwnerConcurrentModificationError,
 )
@@ -222,6 +238,37 @@ async def _handle_close_vote_not_authorized(
     )
 
 
+async def _handle_account_already_has_owner(
+    request: Request, exc: Exception
+) -> JSONResponse:
+    # Dedicated fixed-message handler, NOT the generic _handle_conflict:
+    # AccountAlreadyHasOwnerError is raised both by LinkOwnerToAccount.execute()
+    # (own early pre-check) and by Account.link_owner() (the aggregate's own
+    # guard), mirroring VoteAlreadyClosedError/CloseVote -- never wire this to
+    # str(exc) without checking both call sites' actual message format first.
+    return JSONResponse(
+        status_code=409,
+        content={"detail": "This account already has a linked owner"},
+    )
+
+
+async def _handle_link_owner_not_available(
+    request: Request, exc: Exception
+) -> JSONResponse:
+    # Deliberately ignores str(exc): shared by three distinct causes --
+    # LinkOwnerToAccount's own OwnerNotFoundError (no Owner with that NIF),
+    # its own OwnerAlreadyLinkedError (Owner found but already linked to a
+    # different account), and the domain-level OwnerAlreadyLinkedError (the
+    # rare DB-race path, see PostgresAccountRepository.save()) -- all three
+    # must return a byte-identical body, or a caller could learn whether a
+    # given NIF is registered in Vecinio at all (NIF is a real government ID,
+    # a stronger enumeration risk than an opaque unit_id/community_id).
+    return JSONResponse(
+        status_code=409,
+        content={"detail": "This NIF could not be linked to your account"},
+    )
+
+
 async def _handle_vote_already_closed(request: Request, exc: Exception) -> JSONResponse:
     # Dedicated fixed-message handler, NOT the generic _handle_conflict:
     # VoteAlreadyClosedError is raised both by CloseVote.execute() (own
@@ -259,6 +306,7 @@ def register_exception_handlers(app: FastAPI) -> None:
     app.add_exception_handler(OwnerAlreadyAssignedError, _handle_conflict)
     app.add_exception_handler(DuplicateEmailError, _handle_conflict)
     app.add_exception_handler(CommunityAlreadyMemberError, _handle_conflict)
+    app.add_exception_handler(RegisterAccountOwnerAlreadyLinkedError, _handle_conflict)
 
     app.add_exception_handler(
         CommunityConcurrentModificationError, _handle_concurrent_modification
@@ -279,12 +327,26 @@ def register_exception_handlers(app: FastAPI) -> None:
     app.add_exception_handler(InvalidCredentialsError, _handle_unauthorized)
     app.add_exception_handler(InvalidRefreshTokenError, _handle_unauthorized)
     app.add_exception_handler(CreateVoteAccountNotFoundError, _handle_unauthorized)
+    app.add_exception_handler(LinkOwnerAccountNotFoundError, _handle_unauthorized)
 
     app.add_exception_handler(
         CreateVoteCommunityNotFoundError, _handle_vote_community_access_denied
     )
     app.add_exception_handler(
         AccountNotAuthorizedToCreateVoteError, _handle_vote_community_access_denied
+    )
+
+    app.add_exception_handler(
+        AccountAlreadyHasOwnerError, _handle_account_already_has_owner
+    )
+    app.add_exception_handler(
+        LinkOwnerOwnerNotFoundError, _handle_link_owner_not_available
+    )
+    app.add_exception_handler(
+        LinkOwnerOwnerAlreadyLinkedError, _handle_link_owner_not_available
+    )
+    app.add_exception_handler(
+        AccountOwnerAlreadyLinkedError, _handle_link_owner_not_available
     )
 
     app.add_exception_handler(DuplicateUnitIdentifierError, _handle_value_error)

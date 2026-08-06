@@ -11,3 +11,7 @@ export function login({ email, password }) {
 export function logout(refreshToken) {
   return client.post('/auth/logout', { refresh_token: refreshToken })
 }
+
+export function linkOwner({ nif }) {
+  return client.post('/auth/me/link-owner', { nif }).then((r) => r.data)
+}
